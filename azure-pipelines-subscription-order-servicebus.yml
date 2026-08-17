@@ -1,0 +1,65 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmSubscriptionOrderMessaging
+    type: boolean
+    default: false
+
+variables:
+  resourceGroup: rg-craves-prodlow-centralindia
+  serviceBusNamespace: sb-craves-prodlow-l3ing6
+  topicName: craves-domain-events
+  orderSubscription: order-service-subscription-order-requested
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+
+  - ${{ if eq(parameters.confirmSubscriptionOrderMessaging, true) }}:
+    - task: AzureCLI@2
+      displayName: Configure subscription order request subscription
+      inputs:
+        azureSubscription: $(AZURE_SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          rg='$(resourceGroup)'
+          ns='$(serviceBusNamespace)'
+          topic='$(topicName)'
+          sub='$(orderSubscription)'
+
+          az servicebus topic show -g "$rg" --namespace-name "$ns" -n "$topic" -o none
+          if ! az servicebus topic subscription show -g "$rg" --namespace-name "$ns" --topic-name "$topic" -n "$sub" -o none 2>/dev/null; then
+            az servicebus topic subscription create \
+              -g "$rg" --namespace-name "$ns" --topic-name "$topic" -n "$sub" \
+              --max-delivery-count 10 \
+              --enable-dead-lettering-on-message-expiration true \
+              --enable-batched-operations true -o none
+          fi
+
+          if ! az servicebus topic subscription rule show \
+            -g "$rg" --namespace-name "$ns" --topic-name "$topic" \
+            --subscription-name "$sub" -n subscription-order-requested -o none 2>/dev/null; then
+            az servicebus topic subscription rule create \
+              -g "$rg" --namespace-name "$ns" --topic-name "$topic" \
+              --subscription-name "$sub" -n subscription-order-requested \
+              --filter-sql-expression "event_type = 'SUBSCRIPTION_ORDER_REQUESTED' OR eventType = 'SUBSCRIPTION_ORDER_REQUESTED'" -o none
+          fi
+
+          az servicebus topic subscription rule delete \
+            -g "$rg" --namespace-name "$ns" --topic-name "$topic" \
+            --subscription-name "$sub" -n '$Default' -o none 2>/dev/null || true
+
+          az servicebus topic subscription show \
+            -g "$rg" --namespace-name "$ns" --topic-name "$topic" -n "$sub" \
+            --query '{name:name,activeMessageCount:countDetails.activeMessageCount,deadLetterMessageCount:countDetails.deadLetterMessageCount,maxDeliveryCount:maxDeliveryCount}' -o json
+
+  - ${{ if ne(parameters.confirmSubscriptionOrderMessaging, true) }}:
+    - bash: |
+        echo 'confirmSubscriptionOrderMessaging must be true.' >&2
+        exit 2
+      displayName: Block unconfirmed messaging change

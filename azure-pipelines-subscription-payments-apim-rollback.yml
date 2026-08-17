@@ -1,0 +1,30 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmApimRollback
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: AzureCLI@2
+    displayName: Remove subscription payment and Cashfree webhook APIM operations
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: scripts/apim/rollback-subscription-payments-apim.sh
+    env:
+      RG: ${{ parameters.resourceGroupName }}
+      APIM: ${{ parameters.apimName }}
+      CONFIRM_APIM_ROLLBACK: ${{ parameters.confirmApimRollback }}

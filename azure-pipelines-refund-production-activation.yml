@@ -1,0 +1,117 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: activationStage
+    type: string
+    default: downstream
+    values:
+      - downstream
+      - reconciliation
+      - provider_execution
+  - name: confirmRefundProductionActivation
+    type: boolean
+    default: false
+  - name: expectedExecutableRefundCount
+    type: number
+    default: 0
+  - name: expectedReconcilableRefundCount
+    type: number
+    default: 0
+  - name: expectedProcessingRefundCount
+    type: number
+    default: 0
+
+variables:
+  resourceGroup: rg-craves-prodlow-centralindia
+  containerApp: ca-craves-integration-service-pr
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+
+  - ${{ if eq(parameters.confirmRefundProductionActivation, true) }}:
+    - task: AzureCLI@2
+      displayName: Apply guarded refund production stage
+      env:
+        CRAVES_INTERNAL_SMOKE_SECRET: $(CRAVES_INTERNAL_SMOKE_SECRET)
+      inputs:
+        azureSubscription: $(AZURE_SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          stage='${{ parameters.activationStage }}'
+          [[ -n "${CRAVES_INTERNAL_SMOKE_SECRET:-}" ]] || { echo 'CRAVES_INTERNAL_SMOKE_SECRET is required.' >&2; exit 2; }
+
+          env_json="$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query 'properties.template.containers[0].env' -o json)"
+          current() { jq -r --arg name "$1" '.[] | select(.name == $name) | (.value // .secretRef // "")' <<<"$env_json" | tail -1; }
+          [[ "$(current PAYMENT_PROVIDER_ENVIRONMENT)" == 'production' ]] || { echo 'Cashfree production configuration must be active first.' >&2; exit 2; }
+          [[ "$(current CRAVES_CASHFREE_PRODUCTION_ACTIVATION_APPROVED)" == 'true' ]] || { echo 'Cashfree production approval is missing.' >&2; exit 2; }
+          [[ "$(current CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED)" == 'true' ]] || { echo 'Cashfree production payment execution must be validated before production refunds.' >&2; exit 2; }
+
+          fqdn="$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query properties.configuration.ingress.fqdn -o tsv)"
+          readiness="$(curl -fsS --connect-timeout 10 --max-time 30 \
+            -H "X-Craves-Internal-Secret: ${CRAVES_INTERNAL_SMOKE_SECRET}" \
+            "https://${fqdn}/internal/v1/refund-production-readiness")"
+          executable="$(jq -r '.executableRefundCount' <<<"$readiness")"
+          reconcilable="$(jq -r '.reconcilableRefundCount' <<<"$readiness")"
+          processing="$(jq -r '.processingRefundCount' <<<"$readiness")"
+          refund_dead="$(jq -r '.refundDeadLetterCount' <<<"$readiness")"
+          status_dead="$(jq -r '.statusOutboxDeadLetterCount' <<<"$readiness")"
+          inbox_failed="$(jq -r '.requestInboxFailureCount' <<<"$readiness")"
+          [[ "$executable" == '${{ parameters.expectedExecutableRefundCount }}' ]] || { echo "Unexpected executable refund count: $executable" >&2; exit 2; }
+          [[ "$reconcilable" == '${{ parameters.expectedReconcilableRefundCount }}' ]] || { echo "Unexpected reconcilable refund count: $reconcilable" >&2; exit 2; }
+          [[ "$processing" == '${{ parameters.expectedProcessingRefundCount }}' ]] || { echo "Unexpected processing refund count: $processing" >&2; exit 2; }
+          [[ "$refund_dead" == '0' && "$status_dead" == '0' && "$inbox_failed" == '0' ]] || { echo 'Refund failures/dead letters must be cleared before activation.' >&2; exit 2; }
+
+          case "$stage" in
+            downstream)
+              az containerapp update -g '$(resourceGroup)' -n '$(containerApp)' \
+                --set-env-vars \
+                  CRAVES_REFUND_CONSUMER_ENABLED=true \
+                  CRAVES_REFUND_STATUS_PUBLISHER_ENABLED=true \
+                  CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED=false \
+                  CRAVES_REFUND_RECONCILIATION_ENABLED=false \
+                  CRAVES_REFUND_PRODUCTION_PROVIDER_EXECUTION_APPROVED=false \
+                  CRAVES_REFUND_PRODUCTION_RECONCILIATION_APPROVED=false >/dev/null
+              ;;
+            reconciliation)
+              [[ "$(current CRAVES_REFUND_CONSUMER_ENABLED)" == 'true' ]] || { echo 'Refund consumer must be enabled.' >&2; exit 2; }
+              [[ "$(current CRAVES_REFUND_STATUS_PUBLISHER_ENABLED)" == 'true' ]] || { echo 'Refund status publisher must be enabled.' >&2; exit 2; }
+              az containerapp update -g '$(resourceGroup)' -n '$(containerApp)' \
+                --set-env-vars \
+                  CRAVES_REFUND_PRODUCTION_RECONCILIATION_APPROVED=true \
+                  CRAVES_REFUND_RECONCILIATION_ENABLED=true \
+                  CRAVES_REFUND_PRODUCTION_PROVIDER_EXECUTION_APPROVED=false \
+                  CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED=false >/dev/null
+              ;;
+            provider_execution)
+              [[ "$(current CRAVES_REFUND_CONSUMER_ENABLED)" == 'true' ]] || { echo 'Refund consumer must be enabled.' >&2; exit 2; }
+              [[ "$(current CRAVES_REFUND_STATUS_PUBLISHER_ENABLED)" == 'true' ]] || { echo 'Refund status publisher must be enabled.' >&2; exit 2; }
+              [[ "$(current CRAVES_REFUND_RECONCILIATION_ENABLED)" == 'true' ]] || { echo 'Refund reconciliation must already be enabled.' >&2; exit 2; }
+              [[ "$(current CRAVES_REFUND_PRODUCTION_RECONCILIATION_APPROVED)" == 'true' ]] || { echo 'Production refund reconciliation is not approved.' >&2; exit 2; }
+              az containerapp update -g '$(resourceGroup)' -n '$(containerApp)' \
+                --set-env-vars \
+                  CRAVES_REFUND_PRODUCTION_PROVIDER_EXECUTION_APPROVED=true \
+                  CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED=true >/dev/null
+              ;;
+          esac
+
+          latest="$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query properties.latestRevisionName -o tsv)"
+          for _ in $(seq 1 60); do
+            active="$(az containerapp revision show -g '$(resourceGroup)' -n '$(containerApp)' --revision "$latest" --query properties.active -o tsv 2>/dev/null || true)"
+            provisioning="$(az containerapp revision show -g '$(resourceGroup)' -n '$(containerApp)' --revision "$latest" --query properties.provisioningState -o tsv 2>/dev/null || true)"
+            replicas="$(az containerapp revision show -g '$(resourceGroup)' -n '$(containerApp)' --revision "$latest" --query properties.replicas -o tsv 2>/dev/null || echo 0)"
+            [[ "$active" == 'true' && "$provisioning" == 'Provisioned' && "$replicas" -ge 1 ]] && break
+            sleep 10
+          done
+          [[ "$active" == 'true' && "$provisioning" == 'Provisioned' && "$replicas" -ge 1 ]] || { echo 'Refund production revision did not become active.' >&2; exit 2; }
+
+  - ${{ if ne(parameters.confirmRefundProductionActivation, true) }}:
+    - bash: |
+        echo 'confirmRefundProductionActivation must be true.' >&2
+        exit 2
+      displayName: Block unconfirmed refund activation

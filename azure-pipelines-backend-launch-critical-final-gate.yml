@@ -1,0 +1,134 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      services=(auth-service user-chef-service catalog-service order-service subscription-service integration-service notification-service)
+      for service in "${services[@]}"; do
+        echo "========== FINAL VERIFY $service =========="
+        (cd "services/$service" && mvn -B -ntp clean verify)
+      done
+    displayName: Compile and test all backend services
+
+  - bash: |
+      set -euo pipefail
+      python3 - <<'PY'
+      from pathlib import Path
+      import re
+
+      roots = [
+          Path('services/auth-service/src/main/resources/db/migration'),
+          Path('services/user-chef-service/src/main/resources/db/migration'),
+          Path('services/catalog-service/src/main/resources/db/migration'),
+          Path('services/order-service/src/main/resources/db/migration'),
+          Path('services/subscription-service/src/main/resources/db/migration'),
+          Path('services/integration-service/src/main/resources/db/migration'),
+          Path('services/notification-service/src/main/resources/db/migration'),
+      ]
+      pattern = re.compile(r'^V(\d+)__(.+)\.sql$')
+      for root in roots:
+          if not root.exists():
+              continue
+          seen = {}
+          for path in root.glob('V*__*.sql'):
+              match = pattern.match(path.name)
+              if not match:
+                  raise SystemExit(f'Invalid Flyway filename: {path}')
+              version = int(match.group(1))
+              if version in seen:
+                  raise SystemExit(f'Duplicate Flyway version in {root}: {seen[version]} and {path.name}')
+              seen[version] = path.name
+          print(root, sorted(seen))
+      PY
+    displayName: Validate Flyway filenames and service-local ordering
+
+  - bash: |
+      set -euo pipefail
+      required_false=(
+        CRAVES_LAUNCH_POLICY_ENFORCEMENT_ENABLED
+        CRAVES_DELIVERY_COMMAND_ENABLED
+        CRAVES_DELIVERY_RECONCILIATION_ENABLED
+        CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED
+        CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED
+        CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED
+        BORZO_API_ENABLED
+        CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED
+        CRAVES_SUBSCRIPTION_OCCURRENCE_GENERATOR_ENABLED
+        CRAVES_SUBSCRIPTION_BILLING_GENERATOR_ENABLED
+        CRAVES_SUBSCRIPTION_BILLING_PUBLISHER_ENABLED
+        CRAVES_SUBSCRIPTION_PAYMENT_STATUS_CONSUMER_ENABLED
+        CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED
+        CRAVES_NOTIFICATION_PUSH_ENABLED
+        CRAVES_NOTIFICATION_EMAIL_ENABLED
+        CRAVES_ADMIN_ACCOUNT_INTERVENTION_API_ENABLED
+        CRAVES_ADMIN_ACCOUNT_INTERVENTION_FIREBASE_WORKER_ENABLED
+        CRAVES_NOTIFICATION_RECOVERY_API_ENABLED
+        CRAVES_TOKEN_REVOCATION_PUBLISHER_ENABLED
+        CRAVES_TOKEN_REVOCATION_ENABLED
+        CRAVES_AUTH_RATE_LIMIT_ENABLED
+      )
+      for name in "${required_false[@]}"; do
+        if ! grep -R -F "${name}:" services azure-pipelines*.yml >/dev/null 2>&1 && \
+           ! grep -R -F "${name}:\${" services azure-pipelines*.yml >/dev/null 2>&1 && \
+           ! grep -R -F "${name}=false" services azure-pipelines*.yml >/dev/null 2>&1; then
+          echo "Missing fail-closed evidence for $name" >&2
+          exit 1
+        fi
+      done
+      grep -R -F 'CRAVES_TOKEN_REVOCATION_ENABLED:false' services >/dev/null
+      grep -R -F 'CRAVES_AUTH_RATE_LIMIT_ENABLED:false' services/auth-service >/dev/null
+      grep -R -F 'CRAVES_NOTIFICATION_RECOVERY_API_ENABLED:false' services/notification-service >/dev/null
+    displayName: Verify launch-critical controls remain fail-closed
+
+  - bash: |
+      set -euo pipefail
+      test -s docs/handover/2026-07-31-backend-launch-critical-completion.md
+      grep -F '## 117. Stop condition' docs/handover/2026-07-31-backend-launch-critical-completion.md
+      test -s services/auth-service/modules/redis-abuse-revocation/README.md
+      test -s services/notification-service/modules/recovery-operations/README.md
+      test -s services/auth-service/modules/admin-account-intervention/README.md
+      test -s services/order-service/modules/admin-operations/README.md
+    displayName: Verify final operational handover evidence
+
+  - bash: |
+      set -euo pipefail
+      mkdir -p "$(Build.ArtifactStagingDirectory)/backend-launch-evidence"
+      {
+        echo "repository=$(Build.Repository.Name)"
+        echo "commit=$(Build.SourceVersion)"
+        echo "branch=$(Build.SourceBranch)"
+        echo "generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo 'deployment_executed=false'
+        echo 'azure_mutation_executed=false'
+      } > "$(Build.ArtifactStagingDirectory)/backend-launch-evidence/manifest.txt"
+      find services contracts docs/handover -type f -print0 \
+        | sort -z \
+        | xargs -0 sha256sum \
+        > "$(Build.ArtifactStagingDirectory)/backend-launch-evidence/source-sha256.txt"
+    displayName: Generate immutable backend validation evidence
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish backend launch evidence
+    inputs:
+      targetPath: $(Build.ArtifactStagingDirectory)/backend-launch-evidence
+      artifact: backend-launch-critical-evidence
+
+  - bash: |
+      set -euo pipefail
+      echo 'Final backend gate completed without deployment.'
+      echo 'No image was pushed, no Container App or APIM operation was changed, no migration was run against Azure, and no provider request was sent.'
+    displayName: Confirm read-only gate boundary

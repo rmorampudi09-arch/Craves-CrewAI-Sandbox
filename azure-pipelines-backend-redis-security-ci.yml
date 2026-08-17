@@ -1,0 +1,54 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      services=(auth-service user-chef-service catalog-service order-service subscription-service integration-service notification-service)
+      for service in "${services[@]}"; do
+        echo "========== VERIFY $service =========="
+        (cd "services/$service" && mvn -B -ntp clean verify)
+      done
+    displayName: Verify all seven Spring services
+
+  - bash: |
+      set -euo pipefail
+      services=(auth-service user-chef-service catalog-service order-service subscription-service integration-service notification-service)
+      for service in "${services[@]}"; do
+        grep -F '<artifactId>spring-boot-starter-data-redis</artifactId>' "services/$service/pom.xml"
+        file=$(find "services/$service/src/main/java" -name RedisTokenRevocationWebConfiguration.java -print -quit)
+        test -n "$file"
+        grep -F '${CRAVES_TOKEN_REVOCATION_ENABLED:false}' "$file"
+        grep -F 'authorization == null' "$file"
+        grep -F 'Access token has been revoked' "$file"
+      done
+      grep -F 'publisher-enabled' services/auth-service/src/main/java/in/craves/auth/security/RedisTokenRevocationPublisher.java
+      grep -F '${CRAVES_AUTH_RATE_LIMIT_ENABLED:false}' services/auth-service/src/main/java/in/craves/auth/security/RedisAuthAbuseProtectionFilter.java
+      grep -F '${CRAVES_AUTH_RATE_LIMIT_EXCHANGE_LIMIT:0}' services/auth-service/src/main/java/in/craves/auth/security/RedisAuthAbuseProtectionFilter.java
+      grep -F 'FOR UPDATE SKIP LOCKED' services/auth-service/src/main/java/in/craves/auth/security/RedisTokenRevocationPublisher.java
+      grep -F 'AFTER UPDATE OF status, token_version' services/auth-service/src/main/resources/db/migration/V4__token_revocation_projection_outbox.sql
+    displayName: Verify revocation and rate-limit safety contracts
+
+  - bash: |
+      set -euo pipefail
+      if grep -R -E '(redis|rediss)://[^$({[:space:]]+@' services azure-pipelines*.yml; then
+        echo 'Redis credentials or URLs must not be committed.' >&2
+        exit 1
+      fi
+      if grep -R -E 'flush(All|Db)|FLUSHALL|FLUSHDB' services; then
+        echo 'Redis destructive commands are forbidden.' >&2
+        exit 1
+      fi
+    displayName: Scan Redis secret and destructive-command boundaries

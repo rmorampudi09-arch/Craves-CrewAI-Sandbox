@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "environment": "prodlow",
+  "region": "centralindia",
+  "resourceGroup": "rg-craves-prodlow-centralindia",
+  "containerRegistry": "cravesprodlowacr82121",
+  "apiManagement": "apim-craves-prodlow-l3ing6",
+  "serviceBusNamespace": "sb-craves-prodlow-l3ing6",
+  "containerApps": {
+    "auth": "ca-craves-auth-service-prodlow",
+    "userChef": "ca-craves-user-chef-service-prod",
+    "catalog": "ca-craves-catalog-service-prodlo",
+    "order": "ca-craves-order-service-prodlow",
+    "subscription": "ca-craves-subscription-service-p",
+    "integration": "ca-craves-integration-service-pr",
+    "notification": "ca-craves-notification-service-p"
+  },
+  "forbiddenStaleContainerAppNames": [
+    "ca-craves-user-chef-service-prodlow",
+    "ca-craves-catalog-service-prodlow",
+    "ca-craves-subscription-service-prodlow",
+    "ca-craves-notification-service-prodlow",
+    "ca-craves-notification-service-pr"
+  ],
+  "notes": [
+    "Names are the existing Azure resources and are intentionally shortened where Azure naming limits required it.",
+    "This file is source inventory only and does not create or modify Azure resources."
+  ]
+}

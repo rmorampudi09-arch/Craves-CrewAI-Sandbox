@@ -1,0 +1,20 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    persistCredentials: false
+  - task: JavaToolInstaller@0
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+    displayName: Use Java 21
+  - script: |
+      set -euo pipefail
+      chmod +x scripts/release/validate-java21-maven.sh
+      scripts/release/validate-java21-maven.sh .
+    displayName: Verify every Java service with Maven

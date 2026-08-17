@@ -1,0 +1,65 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmation
+    type: string
+    default: NOT_APPROVED
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: authContainerAppName
+    type: string
+    default: ca-craves-auth-service-prodlow
+  - name: enableApi
+    type: boolean
+    default: false
+  - name: enableFirebaseWorker
+    type: boolean
+    default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: AzureCLI@2
+    displayName: Apply staged Auth account-intervention flags
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        if [[ '${{ parameters.confirmation }}' != 'APPROVE_ACCOUNT_INTERVENTION_ACTIVATION' ]]; then
+          echo 'Explicit account-intervention activation confirmation is required.' >&2
+          exit 1
+        fi
+        if [[ '${{ parameters.enableFirebaseWorker }}' == 'True' && '${{ parameters.enableApi }}' != 'True' ]]; then
+          echo 'Firebase worker cannot be enabled while the API remains disabled.' >&2
+          exit 1
+        fi
+
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.authContainerAppName }}'
+        az containerapp show --resource-group "$RG" --name "$APP" --output none
+
+        if [[ '${{ parameters.enableFirebaseWorker }}' == 'True' ]]; then
+          SECRET_REF=$(az containerapp show --resource-group "$RG" --name "$APP" \
+            --query "properties.template.containers[0].env[?name=='FIREBASE_SERVICE_ACCOUNT_JSON_BASE64']|[0].secretRef" -o tsv)
+          if [[ -z "$SECRET_REF" ]]; then
+            echo 'Auth Container App must bind FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 through secretRef.' >&2
+            exit 1
+          fi
+        fi
+
+        az containerapp update \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --set-env-vars \
+            CRAVES_ADMIN_ACCOUNT_INTERVENTION_API_ENABLED='${{ lower(parameters.enableApi) }}' \
+            CRAVES_ADMIN_ACCOUNT_INTERVENTION_FIREBASE_WORKER_ENABLED='${{ lower(parameters.enableFirebaseWorker) }}' \
+          --output none
+
+        az containerapp show --resource-group "$RG" --name "$APP" \
+          --query "{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,running:properties.runningStatus,api:properties.template.containers[0].env[?name=='CRAVES_ADMIN_ACCOUNT_INTERVENTION_API_ENABLED']|[0].value,worker:properties.template.containers[0].env[?name=='CRAVES_ADMIN_ACCOUNT_INTERVENTION_FIREBASE_WORKER_ENABLED']|[0].value}" \
+          --output json

@@ -1,0 +1,54 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmBillableAzureMapsProvision
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: customerWebContainerApp
+    type: string
+    default: ca-craves-web-prodlow
+  - name: azureMapsAccount
+    type: string
+    default: maps-craves-prodlow-l3ing6
+
+variables:
+  AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection
+  expectedSubscriptionId: 4f897b61-9b52-44b4-8cf1-bdac281cc1aa
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    fetchDepth: 1
+
+  - script: |
+      set -euo pipefail
+      bash -n scripts/release/customer-location-azure-maps-provision.sh
+      if [[ '${{ parameters.confirmBillableAzureMapsProvision }}' != 'True' && '${{ parameters.confirmBillableAzureMapsProvision }}' != 'true' ]]; then
+        echo 'ERROR: confirmBillableAzureMapsProvision must be true. Azure Maps is a billable metered resource.' >&2
+        exit 1
+      fi
+    displayName: Confirm billable Azure Maps provisioning
+
+  - task: AzureCLI@2
+    displayName: Provision Azure Maps and bind managed identity
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        chmod +x scripts/release/customer-location-azure-maps-provision.sh
+        scripts/release/customer-location-azure-maps-provision.sh
+    env:
+      CRAVES_CONFIRM_BILLABLE_AZURE_MAPS: ${{ parameters.confirmBillableAzureMapsProvision }}
+      CRAVES_EXPECTED_SUBSCRIPTION_ID: $(expectedSubscriptionId)
+      CRAVES_RESOURCE_GROUP: ${{ parameters.resourceGroupName }}
+      CRAVES_CUSTOMER_WEB_APP: ${{ parameters.customerWebContainerApp }}
+      CRAVES_AZURE_MAPS_ACCOUNT: ${{ parameters.azureMapsAccount }}

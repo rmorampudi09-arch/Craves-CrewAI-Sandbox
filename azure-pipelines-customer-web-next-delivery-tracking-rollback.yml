@@ -1,0 +1,65 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmRollback
+    type: boolean
+    default: false
+  - name: previousImage
+    type: string
+    default: ''
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: containerAppName
+    type: string
+    default: ca-craves-web-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - script: |
+      set -euo pipefail
+      CONFIRM='${{ parameters.confirmRollback }}'
+      [[ "${CONFIRM,,}" == 'true' ]] || { echo 'ERROR: confirmRollback must be true.' >&2; exit 1; }
+      IMAGE="$PREVIOUS_IMAGE"
+      [[ -n "$IMAGE" ]] || { echo 'ERROR: previousImage is required.' >&2; exit 1; }
+      case "$IMAGE" in
+        *.azurecr.io/craves/customer-web:*|*.azurecr.io/craves/customer-web-next:*) ;;
+        *) echo 'ERROR: previousImage is not an approved Craves customer-web ACR image.' >&2; exit 1 ;;
+      esac
+    displayName: Validate explicit rollback image
+    env:
+      PREVIOUS_IMAGE: ${{ parameters.previousImage }}
+
+  - task: AzureCLI@2
+    displayName: Restore previous customer-web image
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.containerAppName }}'
+        IMAGE="$PREVIOUS_IMAGE"
+        az containerapp update -g "$RG" -n "$APP" --image "$IMAGE" -o none
+        for ATTEMPT in $(seq 1 60); do
+          APP_JSON=$(az containerapp show -g "$RG" -n "$APP" -o json)
+          LATEST=$(jq -r '.properties.latestRevisionName // ""' <<<"$APP_JSON")
+          READY=$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$APP_JSON")
+          RUNNING=$(jq -r '.properties.runningStatus // ""' <<<"$APP_JSON")
+          CURRENT_IMAGE=$(jq -r '.properties.template.containers[0].image // ""' <<<"$APP_JSON")
+          echo "Attempt $ATTEMPT/60: latest=$LATEST ready=$READY running=$RUNNING image=$CURRENT_IMAGE"
+          if [[ "$LATEST" == "$READY" && "$RUNNING" == "Running" && "$CURRENT_IMAGE" == "$IMAGE" ]]; then
+            echo 'SUCCESS: Previous customer-web image restored.'
+            exit 0
+          fi
+          sleep 10
+        done
+        exit 1
+    env:
+      PREVIOUS_IMAGE: ${{ parameters.previousImage }}

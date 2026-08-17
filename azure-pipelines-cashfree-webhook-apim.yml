@@ -1,0 +1,30 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmCashfreeWebhookExposure
+    type: boolean
+    default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - ${{ if eq(parameters.confirmCashfreeWebhookExposure, true) }}:
+    - task: AzureCLI@2
+      displayName: Configure and verify Cashfree webhook APIM route
+      inputs:
+        azureSubscription: 'Craves-Dev-Service-Connection'
+        scriptType: bash
+        scriptLocation: scriptPath
+        scriptPath: scripts/apim/configure-cashfree-webhook-apim.sh
+
+  - ${{ if ne(parameters.confirmCashfreeWebhookExposure, true) }}:
+    - bash: |
+        echo 'confirmCashfreeWebhookExposure must be true.' >&2
+        exit 2
+      displayName: Block unconfirmed Cashfree webhook exposure

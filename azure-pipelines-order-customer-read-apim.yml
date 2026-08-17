@@ -1,0 +1,39 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-order-customer-read-apim.sh
+      python3 - <<'PY'
+      import xml.etree.ElementTree as ET
+      ET.parse('infra/apim/order-customer-read/order-customer-read-policy.xml')
+      PY
+    displayName: Validate order-read APIM inputs
+  - task: AzureCLI@2
+    displayName: Configure customer order list and detail operations
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        export RG='${{ parameters.resourceGroupName }}'
+        export APIM='${{ parameters.apimName }}'
+        export ORDER_APP='${{ parameters.orderContainerAppName }}'
+        bash scripts/apim/configure-order-customer-read-apim.sh

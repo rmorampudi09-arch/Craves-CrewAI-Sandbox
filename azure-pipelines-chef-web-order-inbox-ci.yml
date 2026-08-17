@@ -1,0 +1,30 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Build and test chef order inbox
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-chef-order-read-apim.sh
+      if grep -REn '(customerIdentityId|checkoutId|kitchenId|pickupAddress|localStorage|sessionStorage|console\.(log|debug))' \
+        apps/customer-web-next/src/app/chef/orders \
+        apps/customer-web-next/src/app/api/chef/orders \
+        apps/customer-web-next/src/components/chef-order-* --exclude='*.test.ts'; then
+        echo 'ERROR: Chef order runtime exposes internal identity/pickup fields or insecure behavior.' >&2
+        exit 1
+      fi
+      echo 'Chef order inbox privacy gates passed.'
+    displayName: Verify chef order safety gates

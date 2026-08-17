@@ -1,0 +1,89 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmOrderLeadHoursWrite
+    displayName: Confirm approved order lead-hours write
+    type: boolean
+    default: false
+
+  - name: approvedOrderLeadHours
+    displayName: Approved recurring order lead hours
+    type: number
+    default: 2
+
+  - name: resourceGroupName
+    displayName: Resource group
+    type: string
+    default: rg-craves-prodlow-centralindia
+
+  - name: subscriptionContainerAppName
+    displayName: Subscription Container App
+    type: string
+    default: ca-craves-subscription-service-p
+
+  - name: integrationContainerAppName
+    displayName: Integration Container App
+    type: string
+    default: ca-craves-integration-service-pr
+
+  - name: orderContainerAppName
+    displayName: Order Container App
+    type: string
+    default: ca-craves-order-service-prodlow
+
+  - name: serviceBusNamespace
+    displayName: Service Bus namespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+
+  - name: serviceBusTopic
+    displayName: Service Bus topic
+    type: string
+    default: craves-domain-events
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - bash: |
+      set -euo pipefail
+      bash -n scripts/release/subscription-sandbox-runtime-order-lead-configure.sh
+      bash -n scripts/release/subscription-sandbox-runtime-preflight.sh
+
+      if grep -nE 'local[^\n]*\bPATH=' \
+        scripts/release/subscription-sandbox-runtime-order-lead-configure.sh \
+        scripts/release/subscription-sandbox-runtime-preflight.sh; then
+        echo 'ERROR: Runtime scripts must not shadow the process PATH variable.' >&2
+        exit 1
+      fi
+
+      if grep -n 'mktemp' scripts/release/subscription-sandbox-runtime-order-lead-configure.sh; then
+        echo 'ERROR: Order-lead configuration must not depend on mktemp.' >&2
+        exit 1
+      fi
+    displayName: Validate approved order-lead configuration assets
+
+  - task: AzureCLI@2
+    displayName: Configure approved order lead hours and rerun preflight
+    inputs:
+      azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        export RESOURCE_GROUP='${{ parameters.resourceGroupName }}'
+        export SUBSCRIPTION_APP='${{ parameters.subscriptionContainerAppName }}'
+        export INTEGRATION_APP='${{ parameters.integrationContainerAppName }}'
+        export ORDER_APP='${{ parameters.orderContainerAppName }}'
+        export SERVICE_BUS_NAMESPACE='${{ parameters.serviceBusNamespace }}'
+        export SERVICE_BUS_TOPIC='${{ parameters.serviceBusTopic }}'
+        export CRAVES_APPROVED_SUBSCRIPTION_ORDER_LEAD_HOURS='${{ parameters.approvedOrderLeadHours }}'
+        export CONFIRM_SUBSCRIPTION_ORDER_LEAD_WRITE='${{ parameters.confirmOrderLeadHoursWrite }}'
+
+        bash scripts/release/subscription-sandbox-runtime-order-lead-configure.sh
+
+        echo 'Approved order-lead configuration complete. Running the existing read-only sandbox runtime preflight in the same job.'
+        bash scripts/release/subscription-sandbox-runtime-preflight.sh

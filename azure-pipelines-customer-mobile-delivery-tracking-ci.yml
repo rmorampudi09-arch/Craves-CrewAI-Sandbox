@@ -1,0 +1,38 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: '24.x'
+  - script: |
+      set -euo pipefail
+      cd apps/mobile/customer-app
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test mobile delivery tracking
+  - script: |
+      set -euo pipefail
+      grep -q 'AppState.addEventListener' apps/mobile/customer-app/src/screens/DeliveryTrackingScreen.tsx
+      grep -q '30_000' apps/mobile/customer-app/src/screens/DeliveryTrackingScreen.tsx
+      grep -q 'isTerminalDeliveryStatus' apps/mobile/customer-app/src/screens/DeliveryTrackingScreen.tsx
+      grep -q "url.protocol === 'https:'" apps/mobile/customer-app/src/delivery/contracts.ts
+      grep -q 'Authorization' apps/mobile/customer-app/src/delivery/delivery-api.ts
+      RUNTIME_FILES=(
+        apps/mobile/customer-app/src/delivery/contracts.ts
+        apps/mobile/customer-app/src/delivery/delivery-api.ts
+        apps/mobile/customer-app/src/screens/DeliveryTrackingScreen.tsx
+        apps/mobile/customer-app/src/screens/TrackingLookupScreen.tsx
+      )
+      if grep -En '(rawPayload|providerDeliveryId|console\.(log|debug).*token|AsyncStorage)' "${RUNTIME_FILES[@]}"; then
+        echo 'ERROR: Mobile delivery tracking runtime includes forbidden internal data, logging or storage.' >&2
+        exit 1
+      fi
+      echo 'Mobile delivery tracking safety controls passed.'
+    displayName: Verify polling, privacy and HTTPS controls

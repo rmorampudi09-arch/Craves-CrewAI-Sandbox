@@ -1,0 +1,285 @@
+@theme inline {
+  --color-flame-red: #f62e18;
+  --color-contrast-red: #c92716;
+  --color-black: #000000;
+  --color-cream: #fff4e8;
+  --color-white: #ffffff;
+  --color-gold: #f5b400;
+  --color-grey-50: #f8f8f7;
+  --color-grey-200: #e5e5e2;
+  --color-grey-400: #9a9a95;
+  --color-grey-600: #52524c;
+  --color-success: #0e7c3a;
+  --color-warning: #b7791f;
+  --color-error: #c92716;
+  --color-info: #1e5ba8;
+}
+
+:root {
+  color-scheme: light;
+
+  --color-flame-red: #f62e18;
+  --color-contrast-red: #c92716;
+  --color-black: #000000;
+  --color-cream: #fff4e8;
+  --color-white: #ffffff;
+  --color-gold: #f5b400;
+  --color-grey-50: #f8f8f7;
+  --color-grey-200: #e5e5e2;
+  --color-grey-400: #9a9a95;
+  --color-grey-600: #52524c;
+  --color-success: #0e7c3a;
+  --color-warning: #b7791f;
+  --color-error: #c92716;
+  --color-info: #1e5ba8;
+
+  --background: var(--color-white);
+  --foreground: var(--color-black);
+  --ink: var(--color-black);
+  --cream: var(--color-cream);
+  --cream-deep: var(--color-grey-50);
+  --card: var(--color-white);
+  --card-foreground: var(--color-black);
+  --primary: var(--color-contrast-red);
+  --primary-foreground: var(--color-black);
+  --primary-glow: var(--color-flame-red);
+  --secondary: var(--color-cream);
+  --secondary-foreground: var(--color-black);
+  --muted: var(--color-grey-50);
+  --muted-foreground: var(--color-grey-600);
+  --accent: var(--color-cream);
+  --accent-foreground: var(--color-black);
+  --border: var(--color-grey-200);
+  --input: var(--color-grey-200);
+  --ring: var(--color-flame-red);
+  --destructive: var(--color-contrast-red);
+  --destructive-foreground: var(--color-white);
+
+  --font-display-family: var(--font-craves-display), "Plus Jakarta Sans", "Inter", "Noto Sans Devanagari", "Noto Sans Telugu", "Noto Sans Tamil", "Noto Sans Kannada", system-ui, sans-serif;
+  --font-sans-family: var(--font-craves-body), "Inter", "Noto Sans Devanagari", "Noto Sans Telugu", "Noto Sans Tamil", "Noto Sans Kannada", system-ui, sans-serif;
+
+  --radius: 0.75rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  --radius-pill: 9999px;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-pop: 0 8px 32px rgba(0, 0, 0, 0.12);
+  --shadow-warm: var(--shadow-card);
+  --gradient-primary: var(--color-contrast-red);
+  --gradient-hero: none;
+
+  --motion-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-medium: 220ms cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-slow: 360ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html {
+  min-height: 100%;
+  background: var(--color-white);
+  color: var(--color-black);
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--color-white);
+  color: var(--color-black);
+  font-family: var(--font-sans-family);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--color-black);
+  font-family: var(--font-display-family);
+  letter-spacing: -0.02em;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-flame-red) 18%, transparent);
+  color: var(--color-black);
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-flame-red);
+  outline-offset: 2px;
+}
+
+:where(button, [role="tab"], .btn-primary, .craves-button-link, .chef-panel-nav-link) {
+  border: 1px solid transparent !important;
+  background: var(--color-white) !important;
+  color: var(--color-black) !important;
+  box-shadow: none !important;
+  font-weight: 600;
+  transition:
+    background-color var(--motion-fast),
+    color var(--motion-fast),
+    font-weight var(--motion-fast);
+}
+
+:where(button, [role="tab"], .btn-primary, .craves-button-link, .chef-panel-nav-link):not(:disabled):hover,
+:where(button, [role="tab"], .btn-primary, .craves-button-link, .chef-panel-nav-link):not(:disabled):focus-visible {
+  border: 1px solid transparent !important;
+  background: var(--color-flame-red) !important;
+  color: var(--color-white) !important;
+  font-weight: 700 !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+:where(button, [role="tab"], .btn-primary):disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1.5rem;
+  font-family: var(--font-sans-family);
+  font-size: 0.9375rem;
+  line-height: 1.375rem;
+}
+
+:where(input, textarea, select):focus,
+:where(input, textarea, select):focus-visible {
+  border-color: var(--color-grey-200) !important;
+}
+
+/* Remove the former dark-brown surfaces without turning normal text white. */
+:where([class~="bg-ink"], [class*="bg-ink/"]) {
+  background: var(--color-white) !important;
+  color: var(--color-black) !important;
+}
+
+:where([class~="bg-ink"], [class*="bg-ink/"]) :where([class*="text-white"], [class*="text-[#FFF4E8]"]) {
+  color: var(--color-black) !important;
+}
+
+.craves-surface {
+  border: 1px solid var(--color-grey-200);
+  border-radius: var(--radius-lg);
+  background: var(--color-white);
+  box-shadow: var(--shadow-card);
+}
+
+.craves-container {
+  width: min(100% - 2rem, 72rem);
+  margin-inline: auto;
+}
+
+.craves-overline {
+  color: var(--color-grey-600);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1rem;
+  text-transform: uppercase;
+}
+
+.craves-link {
+  color: var(--color-contrast-red);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.chef-panel-theme {
+  min-height: 100vh;
+  background: var(--color-white) !important;
+  color: var(--color-black) !important;
+}
+
+.chef-panel-header {
+  border-bottom: 1px solid var(--color-grey-200) !important;
+  background: color-mix(in srgb, var(--color-white) 96%, transparent) !important;
+  box-shadow: none !important;
+  backdrop-filter: blur(12px);
+}
+
+.chef-panel-brand {
+  color: var(--color-contrast-red) !important;
+  font-family: var(--font-display-family) !important;
+}
+
+.chef-panel-mode-badge {
+  border-color: var(--color-grey-200) !important;
+  background: var(--color-white) !important;
+  color: var(--color-black) !important;
+}
+
+.chef-panel-nav-link {
+  color: var(--color-black) !important;
+}
+
+.chef-panel-customer-link {
+  border: 1px solid transparent !important;
+  background: var(--color-white) !important;
+  color: var(--color-black) !important;
+}
+
+.chef-panel-customer-link:hover,
+.chef-panel-customer-link:focus-visible {
+  border: 1px solid transparent !important;
+  background: var(--color-flame-red) !important;
+  color: var(--color-white) !important;
+  font-weight: 700 !important;
+}
+
+.chef-panel-theme :is(button, a)[class*="bg-[#6930CA]"],
+.chef-panel-theme :is(button, a)[class*="bg-[#F6B545]"] {
+  border: 1px solid transparent !important;
+  background: var(--color-white) !important;
+  box-shadow: none !important;
+  color: var(--color-black) !important;
+  transform: none !important;
+}
+
+.chef-panel-theme :is(button, a)[class*="bg-[#6930CA]"]:not(:disabled):hover,
+.chef-panel-theme :is(button, a)[class*="bg-[#F6B545]"]:not(:disabled):hover {
+  border: 1px solid transparent !important;
+  background: var(--color-flame-red) !important;
+  color: var(--color-white) !important;
+  font-weight: 700 !important;
+}
+
+.chef-panel-theme :is(input, textarea, select) {
+  border: 1px solid var(--color-grey-200) !important;
+  background: var(--color-white) !important;
+  color: var(--color-black) !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.chef-panel-theme :is(input, textarea, select):focus,
+.chef-panel-theme :is(input, textarea, select):focus-visible {
+  border: 1px solid var(--color-grey-200) !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

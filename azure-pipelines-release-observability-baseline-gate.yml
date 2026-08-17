@@ -1,0 +1,29 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: containerApps
+    type: string
+    default: ca-craves-auth-service-prodlow,ca-craves-user-chef-service-prod,ca-craves-catalog-service-prodlo,ca-craves-order-service-prodlow,ca-craves-integration-service-pr
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    persistCredentials: false
+  - task: AzureCLI@2
+    displayName: Verify source probes and Azure logging destination
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        chmod +x scripts/release/verify-observability-baseline.sh
+        scripts/release/verify-observability-baseline.sh \
+          '${{ parameters.resourceGroupName }}' \
+          '${{ parameters.containerApps }}'

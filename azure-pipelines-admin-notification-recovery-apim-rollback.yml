@@ -1,0 +1,30 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmRollback
+    type: boolean
+    default: false
+  - name: deleteEmptyApi
+    type: boolean
+    default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: AzureCLI@2
+    displayName: Roll back admin notification recovery APIM
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        if [[ '${{ parameters.confirmRollback }}' != 'True' && '${{ parameters.confirmRollback }}' != 'true' ]]; then
+          echo 'ERROR: confirmRollback must be enabled.' >&2
+          exit 1
+        fi
+        CONFIRM_APIM_ROLLBACK=true DELETE_EMPTY_API='${{ parameters.deleteEmptyApi }}' \
+          bash scripts/apim/rollback-admin-notification-recovery-apim.sh

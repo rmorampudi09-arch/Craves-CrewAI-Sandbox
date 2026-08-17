@@ -1,0 +1,256 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: scope
+    type: string
+    default: bootstrap
+    values:
+      - bootstrap
+      - core
+      - all_dependencies
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - ${{ if eq(parameters.scope, 'bootstrap') }}:
+    - task: AzureCLI@2
+      displayName: Validate Azure bootstrap with one service connection
+      inputs:
+        azureSubscription: $(AZURE_SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          INVENTORY='config/production/azure-resource-inventory.json'
+          REPORT='$(Build.ArtifactStagingDirectory)/azure-bootstrap-report.md'
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+
+          command -v jq >/dev/null || fail 'jq is required on the pipeline agent'
+          [[ -f "$INVENTORY" ]] || fail "Azure resource inventory is missing: $INVENTORY"
+          jq -e '.schemaVersion == 1 and (.resourceGroup | length > 0) and (.containerApps | length == 7)' "$INVENTORY" >/dev/null \
+            || fail 'Azure resource inventory is malformed'
+
+          RG=$(jq -r '.resourceGroup' "$INVENTORY")
+          ACR=$(jq -r '.containerRegistry' "$INVENTORY")
+          APIM=$(jq -r '.apiManagement' "$INVENTORY")
+          SERVICE_BUS=$(jq -r '.serviceBusNamespace' "$INVENTORY")
+
+          SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+          TENANT_ID=$(az account show --query tenantId -o tsv)
+          [[ -n "$SUBSCRIPTION_ID" && -n "$TENANT_ID" ]] || fail 'Azure service connection did not return subscription and tenant IDs'
+
+          az group show --name "$RG" --query id -o tsv >/dev/null \
+            || fail "Required Azure resource group was not found: $RG"
+
+          mkdir -p "$(dirname "$REPORT")"
+          {
+            echo '# Craves Azure bootstrap discovery report'
+            echo
+            echo '> Non-secret discovery only. No Azure resource or application setting was changed.'
+            echo
+            echo "- Subscription ID: $SUBSCRIPTION_ID"
+            echo "- Tenant ID: $TENANT_ID"
+            echo "- Resource group: $RG"
+            echo
+            echo '## Resource discovery'
+          } >"$REPORT"
+
+          MISSING_COUNT=0
+          check_resource() {
+            local label="$1"
+            shift
+            if "$@" >/dev/null 2>&1; then
+              echo "FOUND: $label"
+              echo "- FOUND: $label" >>"$REPORT"
+            else
+              echo "PENDING: $label"
+              echo "- PENDING: $label" >>"$REPORT"
+              MISSING_COUNT=$((MISSING_COUNT + 1))
+            fi
+          }
+
+          check_resource "Azure Container Registry $ACR" \
+            az acr show --resource-group "$RG" --name "$ACR"
+          check_resource "API Management $APIM" \
+            az apim show --resource-group "$RG" --name "$APIM"
+          check_resource "Service Bus namespace $SERVICE_BUS" \
+            az servicebus namespace show --resource-group "$RG" --name "$SERVICE_BUS"
+
+          while IFS=$'\t' read -r SERVICE_KEY APP_NAME; do
+            if APP_JSON=$(az containerapp show --resource-group "$RG" --name "$APP_NAME" -o json 2>/dev/null); then
+              RUNNING_STATUS=$(jq -r '.properties.runningStatus // "Unknown"' <<<"$APP_JSON")
+              LATEST_REVISION=$(jq -r '.properties.latestRevisionName // "Unknown"' <<<"$APP_JSON")
+              LATEST_READY=$(jq -r '.properties.latestReadyRevisionName // "Unknown"' <<<"$APP_JSON")
+              FQDN=$(jq -r '.properties.configuration.ingress.fqdn // "Not configured"' <<<"$APP_JSON")
+              echo "FOUND: $SERVICE_KEY -> $APP_NAME status=$RUNNING_STATUS"
+              {
+                echo "- FOUND: $SERVICE_KEY -> $APP_NAME"
+                echo "  - Running status: $RUNNING_STATUS"
+                echo "  - Latest revision: $LATEST_REVISION"
+                echo "  - Latest ready revision: $LATEST_READY"
+                echo "  - FQDN: $FQDN"
+              } >>"$REPORT"
+            else
+              echo "PENDING: $SERVICE_KEY -> $APP_NAME"
+              echo "- PENDING: $SERVICE_KEY -> $APP_NAME" >>"$REPORT"
+              MISSING_COUNT=$((MISSING_COUNT + 1))
+            fi
+          done < <(jq -r '.containerApps | to_entries[] | [.key, .value] | @tsv' "$INVENTORY")
+
+          {
+            echo
+            echo '## Result'
+            echo
+            echo "- Missing or pending optional resources: $MISSING_COUNT"
+            echo '- Required resource group and Azure authentication: verified'
+            echo '- Secrets and deployment variables: intentionally not validated in bootstrap mode'
+          } >>"$REPORT"
+
+          echo "##vso[task.setvariable variable=CRAVES_BOOTSTRAP_MISSING_RESOURCE_COUNT]$MISSING_COUNT"
+          echo "SUCCESS: Azure bootstrap preflight passed using only AZURE_SERVICE_CONNECTION."
+          echo "Discovery report: $REPORT"
+          echo 'No secrets were read, printed, copied, or changed. No Azure resource was modified.'
+
+    - task: PublishPipelineArtifact@1
+      displayName: Publish non-secret Azure bootstrap report
+      inputs:
+        targetPath: $(Build.ArtifactStagingDirectory)/azure-bootstrap-report.md
+        artifact: azure-bootstrap-report
+
+  - ${{ if ne(parameters.scope, 'bootstrap') }}:
+    - task: Bash@3
+      displayName: Validate deployment variables without printing secrets
+      env:
+        POSTGRES_AUTH_DB_URL_VALUE: $(POSTGRES_AUTH_DB_URL)
+        POSTGRES_AUTH_DB_USER_VALUE: $(POSTGRES_AUTH_DB_USER)
+        POSTGRES_AUTH_DB_PASSWORD_VALUE: $(POSTGRES_AUTH_DB_PASSWORD)
+        POSTGRES_BUSINESS_DB_URL_VALUE: $(POSTGRES_BUSINESS_DB_URL)
+        POSTGRES_BUSINESS_DB_USER_VALUE: $(POSTGRES_BUSINESS_DB_USER)
+        POSTGRES_BUSINESS_DB_PASSWORD_VALUE: $(POSTGRES_BUSINESS_DB_PASSWORD)
+        POSTGRES_INTEGRATION_DB_URL_VALUE: $(POSTGRES_INTEGRATION_DB_URL)
+        POSTGRES_INTEGRATION_DB_USER_VALUE: $(POSTGRES_INTEGRATION_DB_USER)
+        POSTGRES_INTEGRATION_DB_PASSWORD_VALUE: $(POSTGRES_INTEGRATION_DB_PASSWORD)
+        FIREBASE_PROJECT_ID_VALUE: $(FIREBASE_PROJECT_ID)
+        FIREBASE_SERVICE_ACCOUNT_JSON_BASE64_VALUE: $(FIREBASE_SERVICE_ACCOUNT_JSON_BASE64)
+        CRAVES_JWT_PRIVATE_KEY_PEM_BASE64_VALUE: $(CRAVES_JWT_PRIVATE_KEY_PEM_BASE64)
+        CRAVES_JWT_VERIFICATION_PEM_BASE64_VALUE: $(CRAVES_JWT_VERIFICATION_PEM_BASE64)
+        CRAVES_INTERNAL_SERVICE_SECRET_VALUE: $(CRAVES_INTERNAL_SERVICE_SECRET)
+        CRAVES_INTERNAL_SERVICE_KEY_VALUE: $(CRAVES_INTERNAL_SERVICE_KEY)
+        CRAVES_INTERNAL_SMOKE_SECRET_VALUE: $(CRAVES_INTERNAL_SMOKE_SECRET)
+        CRAVES_STORAGE_ENDPOINT_VALUE_VALUE: $(CRAVES_STORAGE_ENDPOINT_VALUE)
+        CRAVES_MEDIA_PUBLIC_BASE_URL_VALUE: $(CRAVES_MEDIA_PUBLIC_BASE_URL)
+        SPRING_DATA_REDIS_URL_VALUE: $(SPRING_DATA_REDIS_URL)
+        ACS_EMAIL_CONNECTION_STRING_VALUE: $(ACS_EMAIL_CONNECTION_STRING)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          set +x
+
+          scope='${{ parameters.scope }}'
+          fail() { echo "ERROR: $*" >&2; exit 1; }
+          required() {
+            local name="$1" value="$2"
+            [[ -n "$value" && "$value" != "\$($name)" ]] || fail "Required Azure DevOps variable $name is missing"
+          }
+          valid_jdbc() {
+            local name="$1" value="$2"
+            [[ "$value" == jdbc:postgresql://* ]] || fail "$name must use jdbc:postgresql://"
+            [[ "$value" != *'password='* && "$value" != *'PASSWORD='* ]] || fail "$name must not embed a password"
+            [[ ! "$value" =~ jdbc:postgresql://[^/[:space:]]+:[^/@[:space:]]+@ ]] || fail "$name must not embed user credentials"
+          }
+          valid_https() {
+            local name="$1" value="$2"
+            [[ "$value" == https://* ]] || fail "$name must use HTTPS"
+          }
+
+          required POSTGRES_AUTH_DB_URL "$POSTGRES_AUTH_DB_URL_VALUE"
+          required POSTGRES_AUTH_DB_USER "$POSTGRES_AUTH_DB_USER_VALUE"
+          required POSTGRES_AUTH_DB_PASSWORD "$POSTGRES_AUTH_DB_PASSWORD_VALUE"
+          required POSTGRES_BUSINESS_DB_URL "$POSTGRES_BUSINESS_DB_URL_VALUE"
+          required POSTGRES_BUSINESS_DB_USER "$POSTGRES_BUSINESS_DB_USER_VALUE"
+          required POSTGRES_BUSINESS_DB_PASSWORD "$POSTGRES_BUSINESS_DB_PASSWORD_VALUE"
+          required POSTGRES_INTEGRATION_DB_URL "$POSTGRES_INTEGRATION_DB_URL_VALUE"
+          required POSTGRES_INTEGRATION_DB_USER "$POSTGRES_INTEGRATION_DB_USER_VALUE"
+          required POSTGRES_INTEGRATION_DB_PASSWORD "$POSTGRES_INTEGRATION_DB_PASSWORD_VALUE"
+          required FIREBASE_PROJECT_ID "$FIREBASE_PROJECT_ID_VALUE"
+          required FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 "$FIREBASE_SERVICE_ACCOUNT_JSON_BASE64_VALUE"
+          required CRAVES_JWT_PRIVATE_KEY_PEM_BASE64 "$CRAVES_JWT_PRIVATE_KEY_PEM_BASE64_VALUE"
+          required CRAVES_JWT_VERIFICATION_PEM_BASE64 "$CRAVES_JWT_VERIFICATION_PEM_BASE64_VALUE"
+          required CRAVES_INTERNAL_SERVICE_SECRET "$CRAVES_INTERNAL_SERVICE_SECRET_VALUE"
+          required CRAVES_INTERNAL_SERVICE_KEY "$CRAVES_INTERNAL_SERVICE_KEY_VALUE"
+          required CRAVES_INTERNAL_SMOKE_SECRET "$CRAVES_INTERNAL_SMOKE_SECRET_VALUE"
+          required CRAVES_STORAGE_ENDPOINT_VALUE "$CRAVES_STORAGE_ENDPOINT_VALUE_VALUE"
+          required CRAVES_MEDIA_PUBLIC_BASE_URL "$CRAVES_MEDIA_PUBLIC_BASE_URL_VALUE"
+
+          valid_jdbc POSTGRES_AUTH_DB_URL "$POSTGRES_AUTH_DB_URL_VALUE"
+          valid_jdbc POSTGRES_BUSINESS_DB_URL "$POSTGRES_BUSINESS_DB_URL_VALUE"
+          valid_jdbc POSTGRES_INTEGRATION_DB_URL "$POSTGRES_INTEGRATION_DB_URL_VALUE"
+          valid_https CRAVES_STORAGE_ENDPOINT_VALUE "$CRAVES_STORAGE_ENDPOINT_VALUE_VALUE"
+          valid_https CRAVES_MEDIA_PUBLIC_BASE_URL "$CRAVES_MEDIA_PUBLIC_BASE_URL_VALUE"
+
+          TMP=$(mktemp -d)
+          trap 'rm -rf "$TMP"' EXIT
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON_BASE64_VALUE" | base64 --decode >"$TMP/firebase.json" \
+            || fail 'FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 is not valid base64'
+          python3 - "$TMP/firebase.json" "$FIREBASE_PROJECT_ID_VALUE" <<'PY'
+          import json
+          import sys
+          path, expected = sys.argv[1:]
+          try:
+              data = json.load(open(path, encoding='utf-8'))
+          except Exception as exc:
+              raise SystemExit(f'ERROR: Firebase credential is not valid JSON: {exc}')
+          if data.get('type') != 'service_account':
+              raise SystemExit('ERROR: Firebase credential type must be service_account')
+          if data.get('project_id') != expected:
+              raise SystemExit('ERROR: FIREBASE_PROJECT_ID does not match the Firebase service account project_id')
+          for field in ('private_key_id', 'private_key', 'client_email'):
+              if not data.get(field):
+                  raise SystemExit(f'ERROR: Firebase service account is missing {field}')
+          print('Firebase project and service-account structure validated.')
+          PY
+
+          printf '%s' "$CRAVES_JWT_PRIVATE_KEY_PEM_BASE64_VALUE" | base64 --decode >"$TMP/jwt-private.pem" \
+            || fail 'CRAVES_JWT_PRIVATE_KEY_PEM_BASE64 is not valid base64'
+          printf '%s' "$CRAVES_JWT_VERIFICATION_PEM_BASE64_VALUE" | base64 --decode >"$TMP/jwt-public.pem" \
+            || fail 'CRAVES_JWT_VERIFICATION_PEM_BASE64 is not valid base64'
+          openssl pkey -in "$TMP/jwt-private.pem" -check -noout >/dev/null 2>&1 \
+            || fail 'JWT private key is invalid'
+          openssl pkey -pubin -in "$TMP/jwt-public.pem" -noout >/dev/null 2>&1 \
+            || fail 'JWT verification key is invalid'
+          openssl pkey -in "$TMP/jwt-private.pem" -pubout -out "$TMP/jwt-derived-public.pem" >/dev/null 2>&1
+          DERIVED=$(openssl pkey -pubin -in "$TMP/jwt-derived-public.pem" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
+          CONFIGURED=$(openssl pkey -pubin -in "$TMP/jwt-public.pem" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
+          [[ "$DERIVED" == "$CONFIGURED" ]] || fail 'JWT private and verification keys are not one keypair'
+          echo 'JWT private/verification keypair validated.'
+
+          INTERNAL_HASH=$(printf '%s' "$CRAVES_INTERNAL_SERVICE_SECRET_VALUE" | sha256sum | cut -d' ' -f1)
+          KEY_HASH=$(printf '%s' "$CRAVES_INTERNAL_SERVICE_KEY_VALUE" | sha256sum | cut -d' ' -f1)
+          SMOKE_HASH=$(printf '%s' "$CRAVES_INTERNAL_SMOKE_SECRET_VALUE" | sha256sum | cut -d' ' -f1)
+          [[ "$INTERNAL_HASH" == "$KEY_HASH" && "$INTERNAL_HASH" == "$SMOKE_HASH" ]] \
+            || fail 'Internal service secret variables do not contain the same value'
+          echo 'Shared internal service secret equality validated without printing the value.'
+
+          if [[ "$scope" == 'all_dependencies' ]]; then
+            required SPRING_DATA_REDIS_URL "$SPRING_DATA_REDIS_URL_VALUE"
+            required ACS_EMAIL_CONNECTION_STRING "$ACS_EMAIL_CONNECTION_STRING_VALUE"
+            python3 - "$SPRING_DATA_REDIS_URL_VALUE" <<'PY'
+          import sys
+          from urllib.parse import urlparse
+          parsed = urlparse(sys.argv[1])
+          if parsed.scheme not in {'redis', 'rediss'} or not parsed.hostname or not parsed.password:
+              raise SystemExit('ERROR: SPRING_DATA_REDIS_URL must be redis:// or rediss:// and include a password')
+          print('Redis URL structure validated; connectivity is tested by the binding pipeline.')
+          PY
+            [[ "$ACS_EMAIL_CONNECTION_STRING_VALUE" == endpoint=https://*';accesskey='* ]] \
+              || fail 'ACS_EMAIL_CONNECTION_STRING does not match the expected endpoint/accesskey structure'
+            echo 'Provider dependency variable structures validated.'
+          fi
+
+          echo "SUCCESS: Azure DevOps variable preflight passed for scope=$scope. No secret value was printed and no Azure resource was changed."

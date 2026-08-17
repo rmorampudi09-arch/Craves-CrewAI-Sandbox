@@ -1,0 +1,154 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: ValidateIntegrationService
+    displayName: Validate Integration Service subscription payment bridge
+    jobs:
+      - job: IntegrationService
+        displayName: Java 21 Maven verify
+        steps:
+          - checkout: self
+            clean: true
+          - task: JavaToolInstaller@0
+            inputs:
+              versionSpec: '21'
+              jdkArchitectureOption: x64
+              jdkSourceOption: PreInstalled
+          - bash: |
+              set -euo pipefail
+              mvn -B -ntp clean verify
+            workingDirectory: services/integration-service
+            displayName: Maven clean verify
+
+  - stage: ValidateCustomerMealPlans
+    displayName: Validate Customer Mode Meal Plans frontend
+    dependsOn: ValidateIntegrationService
+    jobs:
+      - job: CustomerWeb
+        displayName: Next.js typecheck lint test build
+        steps:
+          - checkout: self
+            clean: true
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '24.x'
+          - bash: |
+              set -euo pipefail
+              npm ci
+            workingDirectory: apps/customer-web-next
+            displayName: Install customer web dependencies
+          - bash: |
+              set -euo pipefail
+              npm run typecheck
+            workingDirectory: apps/customer-web-next
+            displayName: TypeScript typecheck
+          - bash: |
+              set -euo pipefail
+              npm run lint
+            workingDirectory: apps/customer-web-next
+            displayName: ESLint
+          - bash: |
+              set -euo pipefail
+              npm test
+            workingDirectory: apps/customer-web-next
+            displayName: Customer web unit tests
+          - bash: |
+              set -euo pipefail
+              npm run build
+            workingDirectory: apps/customer-web-next
+            env:
+              CRAVES_API_BASE_URL: https://example.invalid/api/v1
+              NEXT_PUBLIC_CASHFREE_MODE: sandbox
+              NEXT_PUBLIC_CRAVES_ALLOW_CATALOG_FALLBACK: 'false'
+            displayName: Next.js production build
+
+  - stage: ValidateSubscriptionPaymentGateway
+    displayName: Validate subscription payment APIM assets
+    dependsOn: ValidateCustomerMealPlans
+    jobs:
+      - job: ApimStatic
+        displayName: Fail-closed static APIM validation
+        steps:
+          - checkout: self
+            clean: true
+          - bash: |
+              set -euo pipefail
+              bash -n scripts/apim/configure-subscription-payments-apim.sh
+              bash -n scripts/apim/status-subscription-payments-apim.sh
+              bash -n scripts/apim/rollback-subscription-payments-apim.sh
+              python3 - <<'PY'
+              import xml.etree.ElementTree as ET
+              for path in (
+                  'infra/apim/subscription-payments/authenticated-policy.xml',
+                  'infra/apim/subscription-payments/cashfree-webhook-policy.xml',
+              ):
+                  ET.parse(path)
+                  print(f'Valid XML: {path}')
+              PY
+            displayName: Validate APIM scripts and XML
+          - bash: |
+              set -euo pipefail
+              APPLY='scripts/apim/configure-subscription-payments-apim.sh'
+              STATUS='scripts/apim/status-subscription-payments-apim.sh'
+              ROLLBACK='scripts/apim/rollback-subscription-payments-apim.sh'
+
+              grep -q 'CONFIRM_APIM_WRITE' "$APPLY"
+              grep -q 'CONFIRM_APIM_ROLLBACK' "$ROLLBACK"
+              grep -q 'ADOPT:' "$APPLY"
+              grep -Fq 'GET" "/subscriptions/{subscriptionId}"' "$APPLY"
+              grep -Fq 'GET "/subscriptions/{subscriptionId}" true' "$STATUS"
+              grep -Fq 'GET "/subscriptions/{subscriptionId}"' "$ROLLBACK"
+              grep -Fq 'POST" "/invoices/{invoiceId}/orders"' "$APPLY"
+              grep -Fq 'POST" "/webhooks/cashfree"' "$APPLY"
+
+              grep -q 'Authorization' infra/apim/subscription-payments/authenticated-policy.xml
+              if grep -q 'A Bearer access token is required' infra/apim/subscription-payments/cashfree-webhook-policy.xml; then
+                echo 'ERROR: Cashfree webhook policy unexpectedly requires Bearer authentication.' >&2
+                exit 1
+              fi
+              if grep -q '<set-body' infra/apim/subscription-payments/cashfree-webhook-policy.xml; then
+                echo 'ERROR: Cashfree webhook policy must not transform the signed raw request body.' >&2
+                exit 1
+              fi
+              echo 'PASS: Customer Meal Plans Cashfree sandbox APIM safety checks.'
+            displayName: Verify customer Meal Plans payment route safety
+
+  - stage: ScopeGuard
+    displayName: Verify feature remains sandbox-only and scoped
+    dependsOn: ValidateSubscriptionPaymentGateway
+    jobs:
+      - job: ScopeChecks
+        displayName: Sandbox and boundary checks
+        steps:
+          - checkout: self
+            clean: true
+          - bash: |
+              set -euo pipefail
+              COMPONENT='apps/customer-web-next/src/components/subscription-cashfree-payment.tsx'
+              ENROLL='apps/customer-web-next/src/components/subscription-enrollment-form.tsx'
+              BFF='apps/customer-web-next/src/app/api/subscription-payments/invoices/[invoiceId]/orders/route.ts'
+              SERVICE='services/integration-service/src/main/java/in/craves/integration/subscription/SubscriptionPaymentService.java'
+
+              grep -Fq 'Cashfree({ mode: "sandbox" })' "$COMPONENT"
+              grep -Fq '/subscriptions/${encodeURIComponent(subscription.id)}/payment' "$ENROLL"
+              grep -Fq 'authenticatedApiFetch' "$BFF"
+              grep -Fq 'isSameOrigin' "$BFF"
+              grep -Fq '.header("x-idempotency-key", invoiceId.toString())' "$SERVICE"
+              grep -Fq 'StringUtils.hasText(intent.paymentSessionId())' "$SERVICE"
+
+              if grep -Fq 'mode: "production"' "$COMPONENT"; then
+                echo 'ERROR: Customer Meal Plans payment component contains production Cashfree mode.' >&2
+                exit 1
+              fi
+              if grep -REn '(x-client-secret|PAYMENT_PROVIDER_CLIENT_KEY|CRAVES_CASHFREE.*SECRET)' \
+                apps/customer-web-next/src/app/api/subscription-payments \
+                apps/customer-web-next/src/components/subscription-cashfree-payment.tsx; then
+                echo 'ERROR: Payment-provider secret material or secret names must not cross into the customer browser/BFF implementation.' >&2
+                exit 1
+              fi
+              echo 'PASS: Customer Meal Plans payment path is sandbox-only and uses the same-origin BFF boundary.'
+            displayName: Verify sandbox-only customer boundary

@@ -1,0 +1,43 @@
+input.craves-otp-field,
+input.craves-otp-field:hover,
+input.craves-otp-field:focus,
+input.craves-otp-field:focus-visible {
+  border: 1px solid #f62e18 !important;
+  outline: 0 !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+  --tw-ring-color: transparent !important;
+  --tw-ring-offset-color: transparent !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+}
+
+.craves-otp-slot,
+.craves-otp-slot:focus,
+.craves-otp-slot:focus-visible,
+.craves-otp-slot[data-active="true"] {
+  outline: 0 !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+  --tw-ring-color: transparent !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+}
+
+.craves-otp-slot[data-active="true"] {
+  border-color: #f62e18 !important;
+}
+
+#craves-recaptcha-resend.hidden {
+  position: fixed !important;
+  left: 0 !important;
+  bottom: 0 !important;
+  display: block !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}

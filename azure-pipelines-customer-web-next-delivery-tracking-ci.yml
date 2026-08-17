@@ -1,0 +1,59 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  appPath: apps/customer-web-next
+
+steps:
+  - checkout: self
+
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: '24.x'
+
+  - script: |
+      set -euo pipefail
+      cd "$(appPath)"
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Typecheck, test and build Next.js customer web
+
+  - script: |
+      set -euo pipefail
+      docker build -t craves/customer-web-next:ci "$(appPath)"
+    displayName: Build standalone customer web image
+
+  - script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json
+      from pathlib import Path
+      root = Path('apps/customer-web-next')
+      package = json.loads((root / 'package.json').read_text(encoding='utf-8'))
+      assert package['dependencies']['next'] == '16.2.11'
+      assert package['dependencies']['react'] == '19.2.8'
+      assert package['dependencies']['react-dom'] == '19.2.8'
+      assert package['devDependencies']['tailwindcss'] == '4.3.3'
+      assert (root / 'public/robots.txt').exists()
+      assert (root / 'src/app/api/orders/[orderId]/delivery-status/route.ts').exists()
+      assert (root / 'src/app/orders/[orderId]/tracking/page.tsx').exists()
+      print('Framework and tracking file contract verified.')
+      PY
+
+      if grep -REn '(accesskey=|client_secret|Bearer [A-Za-z0-9_-]{30,}|BEGIN (RSA|PRIVATE) KEY)' apps/customer-web-next; then
+        echo 'ERROR: Possible credential literal found.' >&2
+        exit 1
+      fi
+
+      if grep -REn '(localStorage|sessionStorage).*token|VITE_API_BASE_URL' apps/customer-web-next/src; then
+        echo 'ERROR: Tokens must not use browser storage or the legacy Vite API path.' >&2
+        exit 1
+      fi
+      echo 'Customer web security checks passed.'
+    displayName: Verify framework and token-safety controls

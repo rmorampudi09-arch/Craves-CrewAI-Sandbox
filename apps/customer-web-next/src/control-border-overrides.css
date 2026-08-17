@@ -1,0 +1,70 @@
+:root {
+  --ring: var(--color-grey-400);
+}
+
+/*
+ * Final control-edge override.
+ * This file is loaded after the legacy theme and OTP overrides so customer
+ * and chef controls cannot regain logo-coloured borders or rings.
+ */
+body :is(
+    button,
+    [role="button"],
+    [role="tab"],
+    input[type="button"],
+    input[type="submit"],
+    input[type="reset"],
+    .btn-primary,
+    .craves-button-link,
+    .chef-panel-nav-link,
+    .chef-panel-customer-link,
+    a[class*="border-primary"],
+    a[class*="border-[#F62E18]"],
+    a[class*="border-[#C92716]"],
+    a[class*="border-[#6930CA]"],
+    a[class*="border-[#F6B545]"]
+  ) {
+  border-color: transparent !important;
+}
+
+body .chef-panel-theme :is(button, a, [role="button"], [role="tab"]) {
+  border-color: transparent !important;
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus {
+  --tw-ring-color: transparent !important;
+  --tw-ring-offset-color: transparent !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-grey-400) !important;
+  outline-offset: 2px !important;
+  --tw-ring-color: transparent !important;
+  --tw-ring-offset-color: transparent !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+}
+
+body .chef-panel-theme
+  :is(button, a, [role="button"], [role="tab"]):focus-visible {
+  border-color: transparent !important;
+  outline: 2px solid var(--color-grey-400) !important;
+  outline-offset: 2px !important;
+  --tw-ring-color: transparent !important;
+  --tw-ring-offset-color: transparent !important;
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+}
+
+input.craves-otp-field,
+input.craves-otp-field:hover,
+input.craves-otp-field:focus,
+input.craves-otp-field:focus-visible {
+  border-color: var(--color-grey-200) !important;
+}
+
+.craves-otp-slot[data-active="true"] {
+  border-color: var(--color-grey-400) !important;
+}

@@ -1,0 +1,140 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: containerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: serviceBusFullyQualifiedNamespace
+    type: string
+    default: ''
+  - name: domainEventsTopicName
+    type: string
+    default: craves-domain-events
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: AzureCLI@2
+    displayName: Validate and enable Order domain event publisher
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.containerAppName }}'
+        FQ_NAMESPACE='${{ parameters.serviceBusFullyQualifiedNamespace }}'
+        TOPIC='${{ parameters.domainEventsTopicName }}'
+
+        if [ -z "$FQ_NAMESPACE" ]; then
+          echo "serviceBusFullyQualifiedNamespace is required, for example namespace.servicebus.windows.net."
+          exit 1
+        fi
+
+        NAMESPACE_NAME="${FQ_NAMESPACE%%.*}"
+        PRINCIPAL_ID=$(az containerapp identity show \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --query principalId \
+          -o tsv 2>/dev/null)
+
+        if [ -z "$PRINCIPAL_ID" ] || [ "$PRINCIPAL_ID" = "null" ]; then
+          echo "Order Container App does not have a system-assigned managed identity."
+          exit 1
+        fi
+
+        TOPIC_ID=$(az servicebus topic show \
+          --resource-group "$RG" \
+          --namespace-name "$NAMESPACE_NAME" \
+          --name "$TOPIC" \
+          --query id \
+          -o tsv 2>/dev/null)
+
+        if [ -z "$TOPIC_ID" ]; then
+          echo "The existing Service Bus topic '$TOPIC' was not found."
+          exit 1
+        fi
+
+        ROLE_COUNT=$(az role assignment list \
+          --assignee-object-id "$PRINCIPAL_ID" \
+          --scope "$TOPIC_ID" \
+          --query "[?roleDefinitionName=='Azure Service Bus Data Sender'] | length(@)" \
+          -o tsv 2>/dev/null)
+
+        if [ "${ROLE_COUNT:-0}" = "0" ]; then
+          NAMESPACE_ID=$(az servicebus namespace show \
+            --resource-group "$RG" \
+            --name "$NAMESPACE_NAME" \
+            --query id \
+            -o tsv)
+
+          ROLE_COUNT=$(az role assignment list \
+            --assignee-object-id "$PRINCIPAL_ID" \
+            --scope "$NAMESPACE_ID" \
+            --query "[?roleDefinitionName=='Azure Service Bus Data Sender'] | length(@)" \
+            -o tsv 2>/dev/null)
+        fi
+
+        if [ "${ROLE_COUNT:-0}" = "0" ]; then
+          echo "Order managed identity does not have Azure Service Bus Data Sender."
+          exit 1
+        fi
+
+        az containerapp update \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --set-env-vars \
+            CRAVES_DOMAIN_EVENT_OUTBOX_ENABLED=true \
+            CRAVES_DOMAIN_EVENT_SERVICE_BUS_ENABLED=true \
+            CRAVES_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE="$FQ_NAMESPACE" \
+            CRAVES_DOMAIN_EVENTS_TOPIC_NAME="$TOPIC" \
+          --only-show-errors \
+          -o none
+
+        LATEST=$(az containerapp show \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --query properties.latestRevisionName \
+          -o tsv)
+
+        echo "Waiting for revision $LATEST to become healthy..."
+        for attempt in $(seq 1 36); do
+          READY=$(az containerapp show \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --query properties.latestReadyRevisionName \
+            -o tsv)
+          HEALTH=$(az containerapp revision show \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --revision "$LATEST" \
+            --query properties.healthState \
+            -o tsv 2>/dev/null)
+          RUNNING=$(az containerapp revision show \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --revision "$LATEST" \
+            --query properties.runningState \
+            -o tsv 2>/dev/null)
+
+          echo "Attempt $attempt/36: ready=$READY health=$HEALTH running=$RUNNING"
+
+          if [ "$LATEST" = "$READY" ] && [ "$HEALTH" = "Healthy" ] && [[ "$RUNNING" == Running* ]]; then
+            az containerapp show \
+              --resource-group "$RG" \
+              --name "$APP" \
+              --query "properties.template.containers[0].env[?starts_with(name, 'CRAVES_DOMAIN_EVENT') || name=='CRAVES_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE' || name=='CRAVES_DOMAIN_EVENTS_TOPIC_NAME'].{name:name,value:value,secretRef:secretRef}" \
+              -o table
+            exit 0
+          fi
+
+          sleep 10
+        done
+
+        echo "Timed out waiting for a healthy Order Service revision."
+        exit 1

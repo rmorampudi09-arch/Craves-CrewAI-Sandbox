@@ -1,0 +1,28 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    displayName: Azure resource group
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimServiceName
+    displayName: API Management service
+    type: string
+    default: apim-craves-prodlow-l3ing6
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: AzureCLI@2
+    displayName: Read internal administrator RBAC APIM status
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: scripts/apim/status-internal-admin-rbac-apim.sh
+    env:
+      RG: ${{ parameters.resourceGroupName }}
+      APIM: ${{ parameters.apimServiceName }}

@@ -1,0 +1,21 @@
+<policies>
+  <inbound>
+    <!-- Razorpay authenticates this public callback with an HMAC over the untouched raw body. -->
+    <choose>
+      <when condition="@(!context.Request.Headers.ContainsKey(&quot;X-Razorpay-Signature&quot;))">
+        <return-response>
+          <set-status code="400" reason="Bad Request" />
+          <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+          <set-body>{"error":"RAZORPAY_WEBHOOK_SIGNATURE_REQUIRED"}</set-body>
+        </return-response>
+      </when>
+    </choose>
+    <set-backend-service base-url="__PAYMENT_BACKEND_URL__" />
+  </inbound>
+  <backend><base /></backend>
+  <outbound>
+    <set-header name="Cache-Control" exists-action="override"><value>no-store, no-cache, must-revalidate</value></set-header>
+    <set-header name="X-Content-Type-Options" exists-action="override"><value>nosniff</value></set-header>
+  </outbound>
+  <on-error />
+</policies>

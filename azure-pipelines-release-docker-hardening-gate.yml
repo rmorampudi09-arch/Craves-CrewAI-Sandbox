@@ -1,0 +1,14 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    persistCredentials: false
+  - script: |
+      set -euo pipefail
+      chmod +x scripts/release/validate-dockerfiles.sh
+      scripts/release/validate-dockerfiles.sh .
+    displayName: Validate Dockerfile runtime hardening

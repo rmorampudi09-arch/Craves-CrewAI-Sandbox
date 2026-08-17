@@ -1,0 +1,42 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/auth-service
+      mvn -B -ntp clean verify
+    displayName: Verify Auth Service account intervention
+
+  - bash: |
+      set -euo pipefail
+      grep -F 'api-enabled: ${CRAVES_ADMIN_ACCOUNT_INTERVENTION_API_ENABLED:false}' \
+        services/auth-service/src/main/resources/application.yml
+      grep -F 'firebase-worker-enabled: ${CRAVES_ADMIN_ACCOUNT_INTERVENTION_FIREBASE_WORKER_ENABLED:false}' \
+        services/auth-service/src/main/resources/application.yml
+      grep -F 'FOR UPDATE SKIP LOCKED' \
+        services/auth-service/src/main/java/in/craves/auth/admin/AdminAccountInterventionRepository.java
+      grep -F 'revokeRefreshTokens' \
+        services/auth-service/src/main/java/in/craves/auth/admin/FirebaseAccountInterventionWorker.java
+      grep -F 'An administrator cannot suspend their own account' \
+        services/auth-service/src/main/java/in/craves/auth/admin/AdminAccountInterventionRepository.java
+      grep -F 'UPDATE refresh_session' \
+        services/auth-service/src/main/java/in/craves/auth/admin/AdminAccountInterventionRepository.java
+      if grep -R -E 'FIREBASE_SERVICE_ACCOUNT_JSON_BASE64\s*[:=]\s*[^$({ ]' \
+          services/auth-service azure-pipelines-backend-admin-account-intervention*.yml; then
+        echo 'Firebase credentials must never be committed.' >&2
+        exit 1
+      fi
+    displayName: Verify fail-closed account controls

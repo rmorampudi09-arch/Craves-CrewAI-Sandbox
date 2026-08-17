@@ -1,0 +1,33 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/subscription-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify subscription occurrence generator
+
+  - bash: |
+      set -euo pipefail
+      grep -Fq 'enabled: ${CRAVES_SUBSCRIPTION_OCCURRENCE_GENERATOR_ENABLED:false}' \
+        services/subscription-service/src/main/resources/application.yml
+      grep -Fq 'FOR UPDATE OF cs SKIP LOCKED' \
+        services/subscription-service/src/main/java/in/craves/subscription/occurrence/OccurrenceRepository.java
+      grep -Fq 'UNIQUE (subscription_id, service_date)' \
+        services/subscription-service/src/main/resources/db/migration/V4__subscription_occurrence_generation.sql
+    displayName: Verify fail-closed and idempotent generation

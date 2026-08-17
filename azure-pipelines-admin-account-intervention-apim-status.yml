@@ -1,0 +1,15 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: AzureCLI@2
+    displayName: Read admin account intervention APIM status
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: scripts/apim/status-admin-account-intervention-apim.sh

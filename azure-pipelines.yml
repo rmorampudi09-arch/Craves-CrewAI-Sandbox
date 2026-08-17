@@ -1,0 +1,164 @@
+# Craves Azure Foundation Pipeline
+#
+# This pipeline is for Azure DevOps users who connect this GitHub repo to Azure DevOps.
+# It is intentionally parameterized so deployment does not happen accidentally.
+#
+# Required Azure DevOps pipeline variables:
+# - AZURE_SERVICE_CONNECTION: name of the Azure Resource Manager service connection
+# - POSTGRES_ADMIN_PASSWORD: secret variable; rotate before production use
+#
+# Recommended first run:
+# - action = validate
+# - azureLocation = centralindia
+# - resourceGroupName = rg-craves-prodlow-centralindia
+
+trigger: none
+pr: none
+
+parameters:
+  - name: action
+    displayName: Action
+    type: string
+    default: validate
+    values:
+      - validate
+      - what-if
+      - deploy
+
+  - name: azureLocation
+    displayName: Azure Location
+    type: string
+    default: centralindia
+    values:
+      - centralindia
+      - southindia
+
+  - name: resourceGroupName
+    displayName: Resource Group Name
+    type: string
+    default: rg-craves-prodlow-centralindia
+
+variables:
+  projectName: craves
+  environmentName: prodlow
+  acrName: cravesprodlowacr82121
+  templateFile: infra/main.bicep
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: Foundation
+    displayName: Azure Foundation ${{ parameters.action }}
+    jobs:
+      - job: Foundation
+        displayName: Run Azure foundation ${{ parameters.action }}
+        steps:
+          - checkout: self
+
+          - task: AzureCLI@2
+            displayName: Confirm Azure account
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az account show --query "{name:name, subscriptionId:id, tenantId:tenantId}" -o table
+
+          - task: AzureCLI@2
+            displayName: Install Bicep CLI
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az bicep install
+                az bicep version
+
+          - task: AzureCLI@2
+            displayName: Create resource group if missing
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az group create \
+                  --name "${{ parameters.resourceGroupName }}" \
+                  --location "${{ parameters.azureLocation }}"
+
+          - task: AzureCLI@2
+            displayName: Check PostgreSQL SKU availability
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                echo "Checking PostgreSQL Flexible Server SKUs in ${{ parameters.azureLocation }}"
+                az postgres flexible-server list-skus \
+                  --location "${{ parameters.azureLocation }}" \
+                  -o table | head -40
+
+          - task: AzureCLI@2
+            displayName: Validate Bicep deployment
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment group validate \
+                  --resource-group "${{ parameters.resourceGroupName }}" \
+                  --template-file "$(templateFile)" \
+                  --parameters location="${{ parameters.azureLocation }}" \
+                               environmentName="$(environmentName)" \
+                               projectName="$(projectName)" \
+                               acrName="$(acrName)" \
+                               postgresAdminPassword='$(POSTGRES_ADMIN_PASSWORD)'
+
+          - ${{ if or(eq(parameters.action, 'what-if'), eq(parameters.action, 'deploy')) }}:
+              - task: AzureCLI@2
+                displayName: What-if deployment preview
+                inputs:
+                  azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    az deployment group what-if \
+                      --resource-group "${{ parameters.resourceGroupName }}" \
+                      --template-file "$(templateFile)" \
+                      --parameters location="${{ parameters.azureLocation }}" \
+                                   environmentName="$(environmentName)" \
+                                   projectName="$(projectName)" \
+                                   acrName="$(acrName)" \
+                                   postgresAdminPassword='$(POSTGRES_ADMIN_PASSWORD)'
+
+          - ${{ if eq(parameters.action, 'deploy') }}:
+              - task: AzureCLI@2
+                displayName: Deploy foundation
+                inputs:
+                  azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    az deployment group create \
+                      --name craves-foundation-001 \
+                      --resource-group "${{ parameters.resourceGroupName }}" \
+                      --template-file "$(templateFile)" \
+                      --parameters location="${{ parameters.azureLocation }}" \
+                                   environmentName="$(environmentName)" \
+                                   projectName="$(projectName)" \
+                                   acrName="$(acrName)" \
+                                   postgresAdminPassword='$(POSTGRES_ADMIN_PASSWORD)' \
+                      --query "properties.outputs" \
+                      -o json
+
+              - task: AzureCLI@2
+                displayName: List deployed resources
+                inputs:
+                  azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    az resource list \
+                      --resource-group "${{ parameters.resourceGroupName }}" \
+                      --query "[].{Name:name, Type:type, Location:location}" \
+                      -o table

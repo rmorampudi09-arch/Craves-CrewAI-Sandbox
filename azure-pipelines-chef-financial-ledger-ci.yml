@@ -1,0 +1,36 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/integration-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify Integration Service financial ledger
+
+  - bash: |
+      set -euo pipefail
+      migration='services/integration-service/src/main/resources/db/migration/V105__chef_financial_ledger.sql'
+      grep -Fq 'ck_chef_earning_arithmetic' "$migration"
+      grep -Fq "financial_allocation_status = 'PENDING_POLICY'" \
+        services/order-service/src/main/resources/db/migration/V11__subscription_order_fulfillment.sql
+      grep -Fq '.requestMatchers("/api/v1/admin/**").hasRole("ADMIN")' \
+        services/integration-service/src/main/java/in/craves/integration/config/WebSecurityConfiguration.java
+      grep -Fq '.requestMatchers("/api/v1/chef/**").hasRole("CHEF")' \
+        services/integration-service/src/main/java/in/craves/integration/config/WebSecurityConfiguration.java
+      ! grep -RInE 'cashfree.*payout|bank.*transfer.*execute|auto.*settle' \
+        services/integration-service/src/main/java/in/craves/integration/settlement
+    displayName: Verify manual-first financial safety

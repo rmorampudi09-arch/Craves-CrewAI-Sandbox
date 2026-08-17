@@ -1,0 +1,184 @@
+openapi: 3.0.3
+info:
+  title: Craves Auth Service API
+  version: 1.0.0
+  description: Authentication endpoints for Firebase phone token exchange and Craves access/refresh session management.
+servers:
+  - url: https://api.craves.in
+paths:
+  /api/v1/auth/firebase/exchange:
+    post:
+      summary: Exchange Firebase ID token for Craves access and refresh tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FirebaseExchangeRequest'
+      responses:
+        '200':
+          description: Craves tokens issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+        '401':
+          description: Firebase token invalid, expired, or missing phone number
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+  /api/v1/auth/refresh:
+    post:
+      summary: Rotate refresh token and issue a new token pair
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: New tokens issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthTokenResponse'
+        '401':
+          description: Refresh token invalid, expired, or revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke refresh session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+      responses:
+        '200':
+          description: Logout completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutResponse'
+  /api/v1/auth/me:
+    get:
+      summary: Get current authenticated Craves identity
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '401':
+          description: Access token missing, invalid, or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    FirebaseExchangeRequest:
+      type: object
+      required:
+        - firebaseIdToken
+      properties:
+        firebaseIdToken:
+          type: string
+          description: Firebase ID token returned by Firebase Phone Authentication after OTP verification.
+    RefreshTokenRequest:
+      type: object
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+    LogoutRequest:
+      type: object
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+    LogoutResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+    AuthTokenResponse:
+      type: object
+      properties:
+        tokenType:
+          type: string
+          example: Bearer
+        accessToken:
+          type: string
+        expiresIn:
+          type: integer
+          format: int64
+          description: Access token lifetime in seconds.
+        refreshToken:
+          type: string
+        refreshTokenExpiresAt:
+          type: string
+          format: date-time
+        identity:
+          $ref: '#/components/schemas/IdentityResponse'
+    MeResponse:
+      type: object
+      properties:
+        identity:
+          $ref: '#/components/schemas/IdentityResponse'
+    IdentityResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        firebaseUid:
+          type: string
+        phoneNumber:
+          type: string
+        email:
+          type: string
+          nullable: true
+        emailVerified:
+          type: boolean
+        displayName:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [ACTIVE, SUSPENDED]
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [CUSTOMER, CHEF, ADMIN]
+        lastLoginAt:
+          type: string
+          format: date-time
+          nullable: true
+    ApiErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time

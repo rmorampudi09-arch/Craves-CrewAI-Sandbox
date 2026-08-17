@@ -1,0 +1,26 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: AzureCLI@2
+    displayName: Verify subscription and backoffice APIM status
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: scripts/apim/status-subscription-backoffice-apim.sh
+    env:
+      RG: ${{ parameters.resourceGroupName }}
+      APIM: ${{ parameters.apimName }}

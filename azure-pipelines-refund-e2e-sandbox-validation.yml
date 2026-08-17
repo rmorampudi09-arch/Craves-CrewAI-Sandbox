@@ -1,0 +1,93 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: syntheticChefSubOrderId
+    displayName: Paid Cashfree-sandbox chef sub-order UUID
+    type: string
+    default: 00000000-0000-0000-0000-000000000000
+  - name: confirmSyntheticSandboxRefund
+    displayName: I confirm this is an approved synthetic Cashfree sandbox order
+    type: boolean
+    default: false
+  - name: forceAcceptanceExpiry
+    displayName: Accelerate only this paid synthetic order's chef acceptance deadline
+    type: boolean
+    default: false
+  - name: expectedFinalOrderStatus
+    displayName: Expected normalized refund result
+    type: string
+    default: REFUND_PENDING
+    values:
+      - REFUND_PENDING
+      - REFUNDED
+      - REFUND_FAILED
+  - name: maxWaitSeconds
+    type: number
+    default: 900
+  - name: pollIntervalSeconds
+    type: number
+    default: 10
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: notificationContainerAppName
+    type: string
+    default: ca-craves-notification-service-p
+  - name: serviceBusNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+  - name: serviceBusTopic
+    type: string
+    default: craves-domain-events
+  - name: integrationRefundSubscription
+    type: string
+    default: integration-service-refund-requested
+  - name: orderRefundStatusSubscription
+    type: string
+    default: order-service-refund-status-changed
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - bash: |
+      set -euo pipefail
+      bash -n scripts/refund/validate-refund-e2e-sandbox.sh
+      bash -n scripts/refund/run-refund-e2e-sandbox-validation.sh
+    displayName: Validate refund sandbox scripts syntax
+
+  - task: AzureCLI@2
+    displayName: Validate one complete Cashfree sandbox refund
+    timeoutInMinutes: 25
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        bash scripts/refund/verify-refund-rollout-dependencies.sh
+        bash scripts/refund/run-refund-e2e-sandbox-validation.sh
+    env:
+      RESOURCE_GROUP: ${{ parameters.resourceGroupName }}
+      ORDER_APP: ${{ parameters.orderContainerAppName }}
+      INTEGRATION_APP: ${{ parameters.integrationContainerAppName }}
+      NOTIFICATION_APP: ${{ parameters.notificationContainerAppName }}
+      SERVICE_BUS_NAMESPACE: ${{ parameters.serviceBusNamespace }}
+      SERVICE_BUS_TOPIC: ${{ parameters.serviceBusTopic }}
+      INTEGRATION_REFUND_SUBSCRIPTION: ${{ parameters.integrationRefundSubscription }}
+      ORDER_REFUND_STATUS_SUBSCRIPTION: ${{ parameters.orderRefundStatusSubscription }}
+      SYNTHETIC_CHEF_SUB_ORDER_ID: ${{ parameters.syntheticChefSubOrderId }}
+      CONFIRM_SYNTHETIC_SANDBOX_REFUND: ${{ parameters.confirmSyntheticSandboxRefund }}
+      FORCE_ACCEPTANCE_EXPIRY: ${{ parameters.forceAcceptanceExpiry }}
+      EXPECTED_FINAL_ORDER_STATUS: ${{ parameters.expectedFinalOrderStatus }}
+      MAX_WAIT_SECONDS: ${{ parameters.maxWaitSeconds }}
+      POLL_INTERVAL_SECONDS: ${{ parameters.pollIntervalSeconds }}

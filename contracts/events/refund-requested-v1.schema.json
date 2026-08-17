@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.craves.in/events/refund-requested-v1.schema.json",
+  "title": "Craves REFUND_REQUESTED v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "correlationId",
+    "causationId",
+    "source",
+    "subject",
+    "data"
+  ],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "REFUND_REQUESTED" },
+    "eventVersion": { "const": "1.0" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "format": "uuid" },
+    "causationId": { "type": "string", "format": "uuid" },
+    "source": { "const": "order-service" },
+    "subject": { "type": "string", "format": "uuid" },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkoutId",
+        "chefSubOrderId",
+        "customerIdentityId",
+        "refundAmount",
+        "currency",
+        "reason",
+        "requestedAt"
+      ],
+      "properties": {
+        "checkoutId": { "type": "string", "format": "uuid" },
+        "chefSubOrderId": { "type": "string", "format": "uuid" },
+        "customerIdentityId": { "type": "string", "format": "uuid" },
+        "refundAmount": { "type": "number", "exclusiveMinimum": 0 },
+        "currency": { "const": "INR" },
+        "reason": {
+          "enum": ["CHEF_DECLINED", "CHEF_ACCEPTANCE_TIMEOUT"]
+        },
+        "requestedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

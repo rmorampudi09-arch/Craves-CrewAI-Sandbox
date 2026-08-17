@@ -1,0 +1,43 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/subscription-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify Subscription Service
+
+  - bash: |
+      set -euo pipefail
+      cd services/order-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify Order Service
+
+  - bash: |
+      set -euo pipefail
+      sub_config='services/subscription-service/src/main/resources/application.yml'
+      order_config='services/order-service/src/main/resources/application.yml'
+      grep -Fq 'CRAVES_SUBSCRIPTION_ORDER_REQUEST_WORKER_ENABLED:false' "$sub_config"
+      grep -Fq 'CRAVES_SUBSCRIPTION_ORDER_PUBLISHER_ENABLED:false' "$sub_config"
+      grep -Fq 'CRAVES_SUBSCRIPTION_ORDER_LEAD_HOURS:-1' "$sub_config"
+      grep -Fq 'CRAVES_SUBSCRIPTION_ORDER_CONSUMER_ENABLED:false' "$order_config"
+      grep -Fq 'CRAVES_SUBSCRIPTION_ORDER_CALLBACK_WORKER_ENABLED:false' "$order_config"
+      grep -Fq "financial_allocation_status = 'PENDING_POLICY'" \
+        services/order-service/src/main/resources/db/migration/V11__subscription_order_fulfillment.sql
+      grep -Fq 'SUBSCRIPTION_ORDER_REQUESTED' \
+        services/subscription-service/src/main/java/in/craves/subscription/order/OccurrenceOrderModels.java
+    displayName: Verify fail-closed fulfillment contract

@@ -1,0 +1,1 @@
+Implementation branch status: production-completion work in progress; canonical handover is `2026-08-11-subscription-production-completion.md`.

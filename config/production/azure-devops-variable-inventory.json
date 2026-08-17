@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Required Azure DevOps variables for the controlled Craves production deployment pipelines",
+  "nonSecretVariables": [
+    "POSTGRES_AUTH_DB_URL",
+    "POSTGRES_AUTH_DB_USER",
+    "POSTGRES_BUSINESS_DB_URL",
+    "POSTGRES_BUSINESS_DB_USER",
+    "POSTGRES_INTEGRATION_DB_URL",
+    "POSTGRES_INTEGRATION_DB_USER",
+    "FIREBASE_PROJECT_ID",
+    "CRAVES_STORAGE_ENDPOINT_VALUE",
+    "CRAVES_MEDIA_PUBLIC_BASE_URL"
+  ],
+  "secretVariables": [
+    "POSTGRES_AUTH_DB_PASSWORD",
+    "POSTGRES_BUSINESS_DB_PASSWORD",
+    "POSTGRES_INTEGRATION_DB_PASSWORD",
+    "FIREBASE_SERVICE_ACCOUNT_JSON_BASE64",
+    "CRAVES_JWT_PRIVATE_KEY_PEM_BASE64",
+    "CRAVES_JWT_VERIFICATION_PEM_BASE64",
+    "CRAVES_INTERNAL_SERVICE_SECRET",
+    "CRAVES_INTERNAL_SERVICE_KEY",
+    "SPRING_DATA_REDIS_URL",
+    "ACS_EMAIL_CONNECTION_STRING",
+    "CRAVES_INTERNAL_SMOKE_SECRET"
+  ],
+  "externalContainerAppSecrets": [
+    "cashfree-client-id",
+    "cashfree-client-key",
+    "craves-internal-service-secret"
+  ],
+  "rules": [
+    "All secretVariables must be marked secret in Azure DevOps and must never be echoed.",
+    "CRAVES_INTERNAL_SERVICE_SECRET, CRAVES_INTERNAL_SERVICE_KEY and CRAVES_INTERNAL_SMOKE_SECRET must contain the same shared internal secret value.",
+    "FIREBASE_PROJECT_ID must match project_id inside FIREBASE_SERVICE_ACCOUNT_JSON_BASE64.",
+    "CRAVES_JWT_PRIVATE_KEY_PEM_BASE64 and CRAVES_JWT_VERIFICATION_PEM_BASE64 must form one RSA keypair.",
+    "JDBC URLs must use jdbc:postgresql:// and must not embed passwords.",
+    "The pipeline validates values but performs no Azure mutation."
+  ]
+}

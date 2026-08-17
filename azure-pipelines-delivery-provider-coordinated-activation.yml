@@ -1,0 +1,460 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmProductionActivation
+    displayName: I confirm the coordinated production provider cutover
+    type: boolean
+    default: false
+  - name: activateBorzo
+    type: boolean
+    default: false
+  - name: activateShiprocket
+    type: boolean
+    default: false
+  - name: activateShadowfax
+    type: boolean
+    default: false
+  - name: activatePorter
+    type: boolean
+    default: false
+  - name: activateDelhivery
+    type: boolean
+    default: false
+
+  - name: borzoProductionBaseUrl
+    type: string
+    default: https://replace-before-run.invalid
+  - name: borzoCallbackUrl
+    type: string
+    default: https://api.craves.in/api/v1/webhooks/delivery/borzo
+  - name: borzoAuthSecretName
+    type: string
+    default: borzo-api-auth-token
+  - name: borzoCallbackSecretName
+    type: string
+    default: borzo-callback-token
+
+  - name: shiprocketBaseUrl
+    type: string
+    default: https://apiv2.shiprocket.in/v1/external
+  - name: shiprocketCallbackUrl
+    type: string
+    default: https://api.craves.in/api/v1/webhooks/delivery/p4
+  - name: shiprocketApiEmailSecretName
+    type: string
+    default: shiprocket-api-email
+  - name: shiprocketApiPasswordSecretName
+    type: string
+    default: shiprocket-api-password
+  - name: shiprocketWebhookSecretName
+    type: string
+    default: shiprocket-webhook-token
+  - name: shiprocketAttributionApproved
+    type: boolean
+    default: false
+  - name: shiprocketOrderEmail
+    type: string
+    default: ''
+  - name: shiprocketPackageLengthCm
+    type: string
+    default: ''
+  - name: shiprocketPackageBreadthCm
+    type: string
+    default: ''
+  - name: shiprocketPackageHeightCm
+    type: string
+    default: ''
+
+  - name: expectedDeliveryQueueActiveCount
+    type: number
+    default: 0
+  - name: expectedDeliveryQueueScheduledCount
+    type: number
+    default: 0
+  - name: expectedDeliveryQueueDeadLetterCount
+    type: number
+    default: 0
+  - name: expectedStatusSubscriptionActiveCount
+    type: number
+    default: 0
+  - name: expectedStatusSubscriptionDeadLetterCount
+    type: number
+    default: 0
+
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: serviceBusNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+  - name: deliveryQueueName
+    type: string
+    default: delivery-command
+  - name: domainEventsTopicName
+    type: string
+    default: craves-domain-events
+  - name: deliveryStatusSubscriptionName
+    type: string
+    default: order-service-delivery-status-changed
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+
+variables:
+  AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - bash: |
+      set -euo pipefail
+
+      confirm='${{ parameters.confirmProductionActivation }}'
+      borzo='${{ parameters.activateBorzo }}'
+      shiprocket='${{ parameters.activateShiprocket }}'
+      shadowfax='${{ parameters.activateShadowfax }}'
+      porter='${{ parameters.activatePorter }}'
+      delhivery='${{ parameters.activateDelhivery }}'
+
+      [[ "${confirm,,}" == 'true' ]] || {
+        echo 'ERROR: confirmProductionActivation=true is required.' >&2
+        exit 2
+      }
+
+      selected=0
+      for value in "$borzo" "$shiprocket" "$shadowfax" "$porter" "$delhivery"; do
+        [[ "${value,,}" == 'true' ]] && selected=$((selected + 1))
+      done
+      (( selected > 0 )) || {
+        echo 'ERROR: Select at least one provider.' >&2
+        exit 2
+      }
+
+      # These three remain deliberately impossible to activate until their authoritative private
+      # intracity contracts and concrete Spring adapters are committed. A UI checkbox cannot bypass
+      # that engineering/vendor gate.
+      [[ "${shadowfax,,}" != 'true' ]] || {
+        echo 'ERROR: Shadowfax is blocked: VENDOR_PRIVATE_API_CONTRACT_REQUIRED.' >&2
+        exit 2
+      }
+      [[ "${porter,,}" != 'true' ]] || {
+        echo 'ERROR: Porter is blocked: ENTERPRISE_API_ONBOARDING_REQUIRED.' >&2
+        exit 2
+      }
+      [[ "${delhivery,,}" != 'true' ]] || {
+        echo 'ERROR: Delhivery is blocked: INTRACITY_API_PRODUCT_NOT_VERIFIED.' >&2
+        exit 2
+      }
+
+      app_yml='services/integration-service/src/main/resources/application.yml'
+      grep -Fq 'enabled: ${BORZO_API_ENABLED:false}' "$app_yml"
+      grep -Fq 'enabled: ${SHIPROCKET_API_ENABLED:false}' "$app_yml"
+      grep -Fq 'create-enabled: ${SHIPROCKET_CREATE_ENABLED:false}' "$app_yml"
+      grep -Fq 'production-activation-approved: ${SHIPROCKET_PRODUCTION_ACTIVATION_APPROVED:false}' "$app_yml"
+      grep -Fq 'attribution-approved: ${SHIPROCKET_ATTRIBUTION_APPROVED:false}' "$app_yml"
+      grep -R -Fq '/api/v1/webhooks/delivery/p4' services/integration-service/src/main/java
+      grep -R -Fq '/api/v1/webhooks/delivery/borzo' services/integration-service/src/main/java
+
+      echo 'PASS: static provider productionization preflight.'
+    displayName: Static coordinated activation preflight
+
+  - task: AzureCLI@2
+    displayName: Preflight all selected providers before any runtime change
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        set +x
+
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.integrationContainerAppName }}'
+        ORDER_APP='${{ parameters.orderContainerAppName }}'
+        SB='${{ parameters.serviceBusNamespace }}'
+        QUEUE='${{ parameters.deliveryQueueName }}'
+        TOPIC='${{ parameters.domainEventsTopicName }}'
+        STATUS_SUB='${{ parameters.deliveryStatusSubscriptionName }}'
+        APIM='${{ parameters.apimName }}'
+        BORZO_RAW='${{ parameters.activateBorzo }}'
+        SHIPROCKET_RAW='${{ parameters.activateShiprocket }}'
+        BORZO="${BORZO_RAW,,}"
+        SHIPROCKET="${SHIPROCKET_RAW,,}"
+
+        fail() {
+          echo "ERROR: $*" >&2
+          exit 2
+        }
+
+        positive_decimal() {
+          [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+          awk -v value="$1" 'BEGIN { exit !(value > 0) }'
+        }
+
+        for tool in az jq psql python3; do
+          command -v "$tool" >/dev/null || fail "$tool is required on the agent."
+        done
+
+        current_app="$(az containerapp show -g "$RG" -n "$APP" -o json --only-show-errors)"
+        current_latest="$(jq -r '.properties.latestRevisionName // ""' <<<"$current_app")"
+        current_ready="$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$current_app")"
+        [[ -n "$current_latest" && "$current_latest" == "$current_ready" ]] || fail 'Integration Service is not on a fully ready latest revision.'
+
+        queue_json="$(az servicebus queue show -g "$RG" --namespace-name "$SB" -n "$QUEUE" -o json --only-show-errors)"
+        active="$(jq -r '.countDetails.activeMessageCount' <<<"$queue_json")"
+        scheduled="$(jq -r '.countDetails.scheduledMessageCount' <<<"$queue_json")"
+        dead="$(jq -r '.countDetails.deadLetterMessageCount' <<<"$queue_json")"
+        [[ "$active" == '${{ parameters.expectedDeliveryQueueActiveCount }}' ]] || fail "Unexpected delivery queue active count: $active"
+        [[ "$scheduled" == '${{ parameters.expectedDeliveryQueueScheduledCount }}' ]] || fail "Unexpected delivery queue scheduled count: $scheduled"
+        [[ "$dead" == '${{ parameters.expectedDeliveryQueueDeadLetterCount }}' ]] || fail "Unexpected delivery queue DLQ count: $dead"
+
+        status_json="$(az servicebus topic subscription show -g "$RG" --namespace-name "$SB" --topic-name "$TOPIC" -n "$STATUS_SUB" -o json --only-show-errors)"
+        status_active="$(jq -r '.countDetails.activeMessageCount' <<<"$status_json")"
+        status_dead="$(jq -r '.countDetails.deadLetterMessageCount' <<<"$status_json")"
+        [[ "$status_active" == '${{ parameters.expectedStatusSubscriptionActiveCount }}' ]] || fail "Unexpected delivery-status subscription active count: $status_active"
+        [[ "$status_dead" == '${{ parameters.expectedStatusSubscriptionDeadLetterCount }}' ]] || fail "Unexpected delivery-status subscription DLQ count: $status_dead"
+
+        secrets="$(az containerapp secret list -g "$RG" -n "$APP" --query '[].name' -o tsv --only-show-errors)"
+
+        if [[ "$BORZO" == 'true' ]]; then
+          borzo_base='${{ parameters.borzoProductionBaseUrl }}'
+          borzo_callback='${{ parameters.borzoCallbackUrl }}'
+          [[ "$borzo_base" == https://* ]] || fail 'Borzo production base URL must use HTTPS.'
+          [[ "$borzo_base" != *replace-before-run.invalid* ]] || fail 'Replace Borzo production base URL before coordinated activation.'
+          borzo_lower="${borzo_base,,}"
+          [[ "$borzo_lower" != *test* && "$borzo_lower" != *sandbox* ]] || fail 'Borzo production base URL points to a sandbox/test host.'
+          [[ "$borzo_callback" == https://*'/api/v1/webhooks/delivery/borzo' ]] || fail 'Borzo production callback URL is invalid.'
+          grep -qx '${{ parameters.borzoAuthSecretName }}' <<<"$secrets" || fail 'Borzo API auth secret is missing.'
+          grep -qx '${{ parameters.borzoCallbackSecretName }}' <<<"$secrets" || fail 'Borzo callback secret is missing.'
+        fi
+
+        if [[ "$SHIPROCKET" == 'true' ]]; then
+          sr_base='${{ parameters.shiprocketBaseUrl }}'
+          sr_callback='${{ parameters.shiprocketCallbackUrl }}'
+          sr_attribution='${{ parameters.shiprocketAttributionApproved }}'
+          sr_email='${{ parameters.shiprocketOrderEmail }}'
+          sr_length='${{ parameters.shiprocketPackageLengthCm }}'
+          sr_breadth='${{ parameters.shiprocketPackageBreadthCm }}'
+          sr_height='${{ parameters.shiprocketPackageHeightCm }}'
+          [[ "${sr_attribution,,}" == 'true' ]] || fail 'Shiprocket courier attribution approval is required.'
+          [[ -n "$sr_email" && "$sr_email" == *@*.* ]] || fail 'Shiprocket order email is required.'
+          positive_decimal "$sr_length" || fail 'Shiprocket package length must be positive.'
+          positive_decimal "$sr_breadth" || fail 'Shiprocket package breadth must be positive.'
+          positive_decimal "$sr_height" || fail 'Shiprocket package height must be positive.'
+          sr_host="$(python3 -c 'from urllib.parse import urlparse; import sys; print((urlparse(sys.argv[1]).hostname or "").lower())' "$sr_base")"
+          [[ "$sr_host" == 'apiv2.shiprocket.in' ]] || fail 'Shiprocket base URL must use apiv2.shiprocket.in.'
+          [[ "$sr_callback" == https://*'/api/v1/webhooks/delivery/p4' ]] || fail 'Shiprocket callback must use the neutral /p4 route.'
+          sr_callback_lower="${sr_callback,,}"
+          [[ "$sr_callback_lower" != *shiprocket* && "$sr_callback_lower" != *kartrocket* ]] || fail 'Shiprocket callback URL is not provider-neutral.'
+          grep -qx '${{ parameters.shiprocketApiEmailSecretName }}' <<<"$secrets" || fail 'Shiprocket API email secret is missing.'
+          grep -qx '${{ parameters.shiprocketApiPasswordSecretName }}' <<<"$secrets" || fail 'Shiprocket API password secret is missing.'
+          grep -qx '${{ parameters.shiprocketWebhookSecretName }}' <<<"$secrets" || fail 'Shiprocket webhook token secret is missing.'
+        fi
+
+        db_url="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='SPRING_DATASOURCE_URL']|[0].value" -o tsv --only-show-errors)"
+        db_user="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='SPRING_DATASOURCE_USERNAME']|[0].value" -o tsv --only-show-errors)"
+        db_secret_url="$(az containerapp secret list -g "$RG" -n "$APP" --query "[?name=='kv-db-password']|[0].keyVaultUrl" -o tsv --only-show-errors)"
+        [[ "$db_url" == jdbc:postgresql://* && -n "$db_user" && "$db_secret_url" == https://*.vault.azure.net/secrets/* ]] || fail 'Integration DB binding is incomplete.'
+        vault_name="$(cut -d. -f1 <<<"${db_secret_url#https://}")"
+        db_secret_name="${db_secret_url##*/}"
+        db_password="$(az keyvault secret show --vault-name "$vault_name" --name "$db_secret_name" --query value -o tsv --only-show-errors)"
+        [[ -n "$db_password" ]] || fail 'Integration DB password could not be resolved.'
+        export PGPASSWORD="$db_password" PGUSER="$db_user"
+        DB="${db_url#jdbc:}"
+
+        for provider in borzo shiprocket shadowfax porter delhivery; do
+          count="$(psql "$DB" -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM delivery_schema.delivery_provider WHERE provider_id='${provider}';")"
+          [[ "$count" == '1' ]] || fail "Provider catalog row is missing for $provider. Deploy migrations first."
+        done
+
+        if [[ "$BORZO" == 'true' ]]; then
+          open_borzo="$(psql "$DB" -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM delivery_schema.delivery_job WHERE provider_id='borzo' AND status NOT IN ('DELIVERED','CANCELLED','RETURNED','FAILED');")"
+          [[ "$open_borzo" == '0' ]] || fail "Borzo has $open_borzo non-terminal sandbox delivery job(s). Drain/cancel them before switching the provider endpoint to production."
+        fi
+
+        if [[ "$SHIPROCKET" == 'true' ]]; then
+          pickup_table="$(psql "$DB" -At -v ON_ERROR_STOP=1 -c "SELECT to_regclass('delivery_schema.delivery_provider_pickup_location') IS NOT NULL;")"
+          [[ "$pickup_table" == 't' ]] || fail 'Provider pickup mapping migration is missing.'
+          verified_pickups="$(psql "$DB" -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM delivery_schema.delivery_provider_pickup_location WHERE provider_id='shiprocket' AND is_verified=TRUE AND NULLIF(BTRIM(external_location_code),'') IS NOT NULL;")"
+          [[ "$verified_pickups" -ge 1 ]] || fail 'Shiprocket has no verified kitchen pickup mapping.'
+        fi
+
+        mapfile -t API_IDS < <(az apim api list -g "$RG" --service-name "$APIM" --query "[?path=='api/v1/webhooks/delivery'].name" -o tsv --only-show-errors)
+        (( ${#API_IDS[@]} == 1 )) || fail 'Expected exactly one APIM delivery webhook API.'
+        API_ID="${API_IDS[0]}"
+        operations="$(az apim api operation list -g "$RG" --service-name "$APIM" --api-id "$API_ID" -o json --only-show-errors)"
+        if [[ "$BORZO" == 'true' ]]; then
+          [[ "$(jq '[.[] | select((.method | ascii_upcase) == "POST" and .urlTemplate == "/borzo")] | length' <<<"$operations")" == '1' ]] || fail 'Borzo APIM webhook route is missing.'
+        fi
+        if [[ "$SHIPROCKET" == 'true' ]]; then
+          [[ "$(jq '[.[] | select((.method | ascii_upcase) == "POST" and .urlTemplate == "/p4")] | length' <<<"$operations")" == '1' ]] || fail 'Shiprocket neutral APIM /p4 route is missing.'
+        fi
+
+        unset db_password PGPASSWORD PGUSER
+        echo 'PASS: every selected provider passed preflight. No runtime changes have been made.'
+
+  - task: AzureCLI@2
+    displayName: Coordinated production cutover
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        set +x
+
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.integrationContainerAppName }}'
+        ORDER_APP='${{ parameters.orderContainerAppName }}'
+        BORZO_RAW='${{ parameters.activateBorzo }}'
+        SHIPROCKET_RAW='${{ parameters.activateShiprocket }}'
+        BORZO="${BORZO_RAW,,}"
+        SHIPROCKET="${SHIPROCKET_RAW,,}"
+
+        fail() {
+          echo "ERROR: $*" >&2
+          exit 2
+        }
+
+        wait_ready() {
+          local app="$1"
+          local latest ready
+          latest="$(az containerapp show -g "$RG" -n "$app" --query properties.latestRevisionName -o tsv --only-show-errors)"
+          ready=''
+          for _ in $(seq 1 60); do
+            ready="$(az containerapp show -g "$RG" -n "$app" --query properties.latestReadyRevisionName -o tsv --only-show-errors 2>/dev/null || true)"
+            [[ "$ready" == "$latest" ]] && return 0
+            sleep 10
+          done
+          fail "$app revision $latest did not become ready."
+        }
+
+        # Pause only command consumption. Domain events and scheduled commands may accumulate safely
+        # while the provider endpoint/configuration is moved as one controlled cutover.
+        az containerapp update -g "$RG" -n "$APP" \
+          --set-env-vars CRAVES_DELIVERY_COMMAND_ENABLED=false >/dev/null
+        wait_ready "$APP"
+
+        env_args=(
+          CRAVES_DELIVERY_COMMAND_ENABLED=false
+          CRAVES_DELIVERY_RECONCILIATION_ENABLED=true
+          CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED=true
+          CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED=true
+          CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED=true
+          CRAVES_DELIVERY_INTELLIGENCE_ENABLED=true
+        )
+
+        if [[ "$BORZO" == 'true' ]]; then
+          env_args+=(
+            BORZO_API_ENVIRONMENT=PRODUCTION
+            BORZO_PRODUCTION_ACTIVATION_APPROVED=true
+            BORZO_API_BASE_URL='${{ parameters.borzoProductionBaseUrl }}'
+            BORZO_CALLBACK_URL='${{ parameters.borzoCallbackUrl }}'
+            BORZO_API_AUTH_TOKEN='secretref:${{ parameters.borzoAuthSecretName }}'
+            BORZO_CALLBACK_TOKEN='secretref:${{ parameters.borzoCallbackSecretName }}'
+            BORZO_API_ENABLED=true
+          )
+        fi
+
+        if [[ "$SHIPROCKET" == 'true' ]]; then
+          env_args+=(
+            SHIPROCKET_API_ENVIRONMENT=PRODUCTION
+            SHIPROCKET_API_BASE_URL='${{ parameters.shiprocketBaseUrl }}'
+            SHIPROCKET_API_EMAIL='secretref:${{ parameters.shiprocketApiEmailSecretName }}'
+            SHIPROCKET_API_PASSWORD='secretref:${{ parameters.shiprocketApiPasswordSecretName }}'
+            SHIPROCKET_WEBHOOK_TOKEN='secretref:${{ parameters.shiprocketWebhookSecretName }}'
+            SHIPROCKET_ORDER_EMAIL='${{ parameters.shiprocketOrderEmail }}'
+            SHIPROCKET_PACKAGE_LENGTH_CM='${{ parameters.shiprocketPackageLengthCm }}'
+            SHIPROCKET_PACKAGE_BREADTH_CM='${{ parameters.shiprocketPackageBreadthCm }}'
+            SHIPROCKET_PACKAGE_HEIGHT_CM='${{ parameters.shiprocketPackageHeightCm }}'
+            SHIPROCKET_API_ENABLED=true
+            SHIPROCKET_CREATE_ENABLED=true
+            SHIPROCKET_PRODUCTION_ACTIVATION_APPROVED=true
+            SHIPROCKET_ATTRIBUTION_APPROVED=true
+          )
+        fi
+
+        az containerapp update -g "$RG" -n "$APP" --set-env-vars "${env_args[@]}" >/dev/null
+        wait_ready "$APP"
+
+        db_url="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='SPRING_DATASOURCE_URL']|[0].value" -o tsv --only-show-errors)"
+        db_user="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='SPRING_DATASOURCE_USERNAME']|[0].value" -o tsv --only-show-errors)"
+        db_secret_url="$(az containerapp secret list -g "$RG" -n "$APP" --query "[?name=='kv-db-password']|[0].keyVaultUrl" -o tsv --only-show-errors)"
+        vault_name="$(cut -d. -f1 <<<"${db_secret_url#https://}")"
+        db_secret_name="${db_secret_url##*/}"
+        db_password="$(az keyvault secret show --vault-name "$vault_name" --name "$db_secret_name" --query value -o tsv --only-show-errors)"
+        export PGPASSWORD="$db_password" PGUSER="$db_user"
+        DB="${db_url#jdbc:}"
+
+        sql='BEGIN;'
+        [[ "$BORZO" == 'true' ]] && sql+=" UPDATE delivery_schema.delivery_provider SET is_active=TRUE, updated_at=now() WHERE provider_id='borzo';"
+        [[ "$SHIPROCKET" == 'true' ]] && sql+=" UPDATE delivery_schema.delivery_provider SET is_active=TRUE, updated_at=now() WHERE provider_id='shiprocket';"
+        sql+=' COMMIT;'
+        psql "$DB" -v ON_ERROR_STOP=1 -c "$sql" >/dev/null
+
+        # Both directions of the event flow are made explicit here: chef acceptance publisher and
+        # delivery-status consumer. This prevents a later deployment from silently reverting either
+        # side to its fail-closed application.yml default.
+        az containerapp update -g "$RG" -n "$ORDER_APP" \
+          --set-env-vars \
+            CRAVES_DOMAIN_EVENT_OUTBOX_ENABLED=true \
+            CRAVES_DOMAIN_EVENT_SERVICE_BUS_ENABLED=true \
+            CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED=true >/dev/null
+        wait_ready "$ORDER_APP"
+
+        # Provider settings + DB catalog are ready; only now resume command execution.
+        az containerapp update -g "$RG" -n "$APP" \
+          --set-env-vars CRAVES_DELIVERY_COMMAND_ENABLED=true >/dev/null
+        wait_ready "$APP"
+
+        env_json="$(az containerapp show -g "$RG" -n "$APP" --query 'properties.template.containers[0].env' -o json --only-show-errors)"
+        value() { jq -r --arg name "$1" '.[] | select(.name == $name) | (.value // .secretRef // "")' <<<"$env_json" | tail -1; }
+        [[ "$(value CRAVES_DELIVERY_COMMAND_ENABLED)" == 'true' ]] || fail 'Delivery command worker did not resume.'
+        [[ "$(value CRAVES_DELIVERY_RECONCILIATION_ENABLED)" == 'true' ]] || fail 'Create reconciliation is not enabled.'
+        [[ "$(value CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED)" == 'true' ]] || fail 'Webhook processing is not enabled.'
+        [[ "$(value CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED)" == 'true' ]] || fail 'Tracking reconciliation is not enabled.'
+        [[ "$(value CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED)" == 'true' ]] || fail 'Delivery-status publisher is not enabled.'
+
+        if [[ "$BORZO" == 'true' ]]; then
+          [[ "$(value BORZO_API_ENVIRONMENT)" == 'PRODUCTION' ]] || fail 'Borzo environment verification failed.'
+          [[ "$(value BORZO_API_ENABLED)" == 'true' ]] || fail 'Borzo API enable verification failed.'
+          [[ "$(psql "$DB" -At -v ON_ERROR_STOP=1 -c "SELECT is_active FROM delivery_schema.delivery_provider WHERE provider_id='borzo';")" == 't' ]] || fail 'Borzo provider catalog activation failed.'
+        fi
+        if [[ "$SHIPROCKET" == 'true' ]]; then
+          [[ "$(value SHIPROCKET_API_ENVIRONMENT)" == 'PRODUCTION' ]] || fail 'Shiprocket environment verification failed.'
+          [[ "$(value SHIPROCKET_API_ENABLED)" == 'true' ]] || fail 'Shiprocket API enable verification failed.'
+          [[ "$(value SHIPROCKET_CREATE_ENABLED)" == 'true' ]] || fail 'Shiprocket create verification failed.'
+          [[ "$(psql "$DB" -At -v ON_ERROR_STOP=1 -c "SELECT is_active FROM delivery_schema.delivery_provider WHERE provider_id='shiprocket';")" == 't' ]] || fail 'Shiprocket provider catalog activation failed.'
+        fi
+
+        order_env="$(az containerapp show -g "$RG" -n "$ORDER_APP" --query 'properties.template.containers[0].env' -o json --only-show-errors)"
+        order_value() { jq -r --arg name "$1" '.[] | select(.name == $name) | (.value // "")' <<<"$order_env" | tail -1; }
+        [[ "$(order_value CRAVES_DOMAIN_EVENT_OUTBOX_ENABLED)" == 'true' ]] || fail 'Order outbox is not enabled.'
+        [[ "$(order_value CRAVES_DOMAIN_EVENT_SERVICE_BUS_ENABLED)" == 'true' ]] || fail 'Order Service Bus publisher is not enabled.'
+        [[ "$(order_value CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED)" == 'true' ]] || fail 'Order delivery-status consumer is not enabled.'
+
+        unset db_password PGPASSWORD PGUSER
+
+        echo '============================================================'
+        echo 'CRAVES COORDINATED DELIVERY PROVIDER PRODUCTION CUTOVER: PASS'
+        echo "Borzo production active: $BORZO"
+        echo "Shiprocket production active: $SHIPROCKET"
+        echo 'Shadowfax: blocked until private API contract + adapter are committed'
+        echo 'Porter: blocked until Enterprise API onboarding + adapter are committed'
+        echo 'Delhivery: blocked until Intracity API product + adapter are verified'
+        echo 'Delivery command worker: RESUMED'
+        echo 'Order event publisher: ENABLED'
+        echo 'Delivery status consumer: ENABLED'
+        echo '============================================================'

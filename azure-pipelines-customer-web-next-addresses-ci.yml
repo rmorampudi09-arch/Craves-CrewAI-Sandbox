@@ -1,0 +1,35 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+variables:
+  appPath: apps/customer-web-next
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd "$(appPath)"
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Typecheck, test and build customer addresses
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-customer-addresses-apim.sh
+      python3 - <<'PY'
+      import xml.etree.ElementTree as ET
+      ET.parse('infra/apim/customer-addresses/customer-address-policy.xml')
+      print('Customer address policy XML is valid.')
+      PY
+      grep -q 'isSameOrigin' apps/customer-web-next/src/app/api/customer/addresses/route.ts
+      grep -q 'isSameOrigin' 'apps/customer-web-next/src/app/api/customer/addresses/[addressId]/route.ts'
+      if grep -REn '(identityId|localStorage|sessionStorage).*' apps/customer-web-next/src/components/customer-addresses.tsx; then
+        echo 'ERROR: Address UI references forbidden identity or browser storage fields.' >&2
+        exit 1
+      fi
+    displayName: Verify address security and APIM assets

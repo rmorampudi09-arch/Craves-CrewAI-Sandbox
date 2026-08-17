@@ -1,0 +1,38 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/mobile/customer-app
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test mobile chef order workflow
+  - script: |
+      set -euo pipefail
+      grep -q 'Idempotency-Key' apps/mobile/customer-app/src/chef/chef-order-api.ts
+      grep -q 'X-Correlation-ID' apps/mobile/customer-app/src/chef/chef-order-api.ts
+      if grep -REn '(customerIdentityId|checkoutId|kitchenId|pickupAddress|AsyncStorage|console\.(log|debug))' \
+        apps/mobile/customer-app/src/chef/chef-order-* \
+        apps/mobile/customer-app/src/screens/ChefOrdersScreen.tsx \
+        apps/mobile/customer-app/src/screens/ChefOrderDetailsScreen.tsx --exclude='*.test.ts'; then
+        echo 'ERROR: Mobile chef order runtime exposes internal fields, insecure storage or logs.' >&2
+        exit 1
+      fi
+      if grep -REn '(cancel|refund|provider|out-for-delivery)' apps/mobile/customer-app/src/screens/ChefOrderDetailsScreen.tsx; then
+        echo 'ERROR: Unsupported mobile chef transition was introduced.' >&2
+        exit 1
+      fi
+      if grep -REn 'console\.(log|debug).*accessToken|accessToken.*console\.(log|debug)' apps/mobile/customer-app/src; then
+        echo 'ERROR: Mobile runtime logs an access token.' >&2
+        exit 1
+      fi
+      echo 'Mobile chef order privacy, idempotency and transition gates passed.'
+    displayName: Verify mobile chef order safety gates

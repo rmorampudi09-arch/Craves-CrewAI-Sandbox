@@ -1,0 +1,33 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/order-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify Order launch policy module
+
+  - bash: |
+      set -euo pipefail
+      grep -Fq 'CRAVES_LAUNCH_POLICY_ENFORCEMENT_ENABLED:false' services/order-service/src/main/resources/application.yml
+      grep -Fq 'ux_launch_policy_single_active' services/order-service/src/main/resources/db/migration/V10__launch_policy_registry.sql
+      if grep -RInE 'maximum-serviceability-radius-meters:[[:space:]]*[1-9]|minimum-order-amount:[[:space:]]*[1-9]' services/order-service/src/main/resources; then
+        echo 'ERROR: Product policy values must not be hard-coded.' >&2
+        exit 1
+      fi
+    displayName: Verify fail-closed policy controls

@@ -1,0 +1,26 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmApimWrite
+    type: boolean
+    default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: AzureCLI@2
+    displayName: Configure admin account intervention APIM
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        if [[ '${{ parameters.confirmApimWrite }}' != 'True' && '${{ parameters.confirmApimWrite }}' != 'true' ]]; then
+          echo 'ERROR: confirmApimWrite must be enabled.' >&2
+          exit 1
+        fi
+        CONFIRM_APIM_WRITE=true bash scripts/apim/configure-admin-account-intervention-apim.sh

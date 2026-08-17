@@ -1,0 +1,34 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/subscription-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify subscription service
+
+  - bash: |
+      set -euo pipefail
+      config='services/subscription-service/src/main/resources/application.yml'
+      grep -Fq 'CRAVES_SUBSCRIPTION_BILLING_GENERATOR_ENABLED:false' "$config"
+      grep -Fq 'CRAVES_SUBSCRIPTION_BILLING_PUBLISHER_ENABLED:false' "$config"
+      grep -Fq 'SUBSCRIPTION_PAYMENT_REQUESTED' \
+        services/subscription-service/src/main/java/in/craves/subscription/billing/SubscriptionBillingService.java
+      ! grep -RInE 'client[_-]?secret|account[_-]?key|Bearer [A-Za-z0-9._-]{20,}' \
+        services/subscription-service/src/main/java/in/craves/subscription/billing \
+        services/subscription-service/src/main/resources/application.yml
+    displayName: Verify fail-closed billing contract

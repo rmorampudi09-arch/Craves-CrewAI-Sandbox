@@ -1,0 +1,38 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmation
+    type: string
+    default: NOT_APPROVED
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: authContainerAppName
+    type: string
+    default: ca-craves-auth-service-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: AzureCLI@2
+    displayName: Disable account intervention API and Firebase worker
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        if [[ '${{ parameters.confirmation }}' != 'APPROVE_ACCOUNT_INTERVENTION_ROLLBACK' ]]; then
+          echo 'Explicit rollback confirmation is required.' >&2
+          exit 1
+        fi
+        az containerapp update \
+          --resource-group '${{ parameters.resourceGroupName }}' \
+          --name '${{ parameters.authContainerAppName }}' \
+          --set-env-vars \
+            CRAVES_ADMIN_ACCOUNT_INTERVENTION_API_ENABLED=false \
+            CRAVES_ADMIN_ACCOUNT_INTERVENTION_FIREBASE_WORKER_ENABLED=false \
+          --output none
+        echo 'Account intervention execution is disabled. Existing intervention and audit rows were preserved.'

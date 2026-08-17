@@ -1,0 +1,90 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    fetchDepth: 1
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - script: |
+      set -euo pipefail
+      cd services/subscription-service
+      mvn -B -ntp clean verify
+    displayName: Build and test Subscription Service
+
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: '24.x'
+
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm ci --ignore-scripts --no-audit --no-fund
+      npm run lint
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Verify customer, chef, and admin web
+    env:
+      CRAVES_API_BASE_URL: https://api.craves.in/api/v1
+      NEXT_PUBLIC_FIREBASE_API_KEY: ci-public-placeholder
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ci.example.invalid
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: craves-ci
+      NEXT_PUBLIC_FIREBASE_APP_ID: 1:000000000000:web:0000000000000000000000
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '000000000000'
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: craves-ci.invalid
+      NEXT_PUBLIC_CASHFREE_MODE: sandbox
+      NEXT_PUBLIC_CRAVES_ALLOW_CATALOG_FALLBACK: 'false'
+      NEXT_PUBLIC_SYNCFUSION_LICENSE_KEY: ''
+
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-subscription-backoffice-apim.sh
+      bash -n scripts/apim/status-subscription-backoffice-apim.sh
+      bash -n scripts/apim/rollback-subscription-backoffice-apim.sh
+      python3 - <<'PY'
+      import xml.etree.ElementTree as ET
+      for path in (
+          'infra/apim/subscription-backoffice/authenticated-policy.xml',
+          'infra/apim/subscription-backoffice/public-policy.xml',
+      ):
+          ET.parse(path)
+          print(f'Valid XML: {path}')
+      PY
+      grep -q 'api/v1/chef/subscription-capacity' scripts/apim/configure-subscription-backoffice-apim.sh
+      grep -q 'api/v1/admin/subscription-capacity' scripts/apim/configure-subscription-backoffice-apim.sh
+      grep -q 'CONFIRM_APIM_WRITE' scripts/apim/configure-subscription-backoffice-apim.sh
+      grep -q 'CONFIRM_APIM_ROLLBACK' scripts/apim/rollback-subscription-backoffice-apim.sh
+      echo 'Subscription capacity APIM safety gates passed.'
+    displayName: Validate APIM capacity assets
+
+  - script: |
+      set -euo pipefail
+      grep -q 'CRAVES_SUBSCRIPTION_CAPACITY_PROJECTION_ENABLED:false' services/subscription-service/src/main/resources/application.yml
+      grep -q 'CRAVES_SUBSCRIPTION_OCCURRENCE_GENERATOR_ENABLED:false' services/subscription-service/src/main/resources/application.yml
+      grep -q 'CRAVES_SUBSCRIPTION_BILLING_GENERATOR_ENABLED:false' services/subscription-service/src/main/resources/application.yml
+      grep -q 'CRAVES_SUBSCRIPTION_BILLING_PUBLISHER_ENABLED:false' services/subscription-service/src/main/resources/application.yml
+      grep -q 'CRAVES_SUBSCRIPTION_PAYMENT_STATUS_CONSUMER_ENABLED:false' services/subscription-service/src/main/resources/application.yml
+      grep -q 'CRAVES_SUBSCRIPTION_ORDER_REQUEST_WORKER_ENABLED:false' services/subscription-service/src/main/resources/application.yml
+      grep -q 'CRAVES_SUBSCRIPTION_ORDER_PUBLISHER_ENABLED:false' services/subscription-service/src/main/resources/application.yml
+      if grep -REn '(password\s*[:=]\s*[^$ ]|client-secret\s*[:=]\s*[^$ ]|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{20,})' \
+        services/subscription-service/src \
+        apps/customer-web-next/src/app/api/chef/subscription-capacity \
+        apps/customer-web-next/src/app/api/admin/subscription-capacity \
+        scripts/apim/*subscription-backoffice*; then
+        echo 'ERROR: Potential credential material detected in capacity changes.' >&2
+        exit 1
+      fi
+      echo 'Capacity fail-closed and credential gates passed.'
+    displayName: Verify fail-closed runtime defaults

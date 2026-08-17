@@ -1,0 +1,34 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/integration-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify refund production readiness
+
+  - bash: |
+      set -euo pipefail
+      file=services/integration-service/src/main/resources/application.yml
+      grep -Fq 'provider-execution-enabled: ${CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED:false}' "$file"
+      grep -Fq 'reconciliation-enabled: ${CRAVES_REFUND_RECONCILIATION_ENABLED:false}' "$file"
+      grep -Fq 'production-provider-execution-approved: ${CRAVES_REFUND_PRODUCTION_PROVIDER_EXECUTION_APPROVED:false}' "$file"
+      grep -Fq 'production-reconciliation-approved: ${CRAVES_REFUND_PRODUCTION_RECONCILIATION_APPROVED:false}' "$file"
+      grep -Fq 'CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED:false' \
+        services/integration-service/src/main/java/in/craves/integration/config/PaymentProviderProperties.java
+    displayName: Verify financial switches default false

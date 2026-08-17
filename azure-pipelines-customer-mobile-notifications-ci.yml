@@ -1,0 +1,27 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/mobile/customer-app
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test mobile notifications
+  - script: |
+      set -euo pipefail
+      grep -q 'Authorization' apps/mobile/customer-app/src/notifications/notifications-api.ts
+      grep -q 'markNotificationRead' apps/mobile/customer-app/src/screens/NotificationsScreen.tsx
+      if grep -REn '(rawPayload|eventKey|providerPayload|console\.(log|debug))' apps/mobile/customer-app/src/notifications apps/mobile/customer-app/src/screens/NotificationsScreen.tsx --exclude='*.test.ts'; then
+        echo 'ERROR: Mobile notification runtime references internal payload or logging.' >&2
+        exit 1
+      fi
+      echo 'Mobile notification privacy controls passed.'
+    displayName: Verify notification safety

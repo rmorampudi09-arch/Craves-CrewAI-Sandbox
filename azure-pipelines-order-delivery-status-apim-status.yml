@@ -1,0 +1,38 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: apiId
+    type: string
+    default: ''
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: AzureCLI@2
+    displayName: Read and verify customer delivery-status APIM state
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        export RG='${{ parameters.resourceGroupName }}'
+        export APIM='${{ parameters.apimName }}'
+        export ORDER_APP='${{ parameters.orderContainerAppName }}'
+        export API_ID='${{ parameters.apiId }}'
+        unset CRAVES_ACCESS_TOKEN || true
+        unset TEST_ORDER_ID || true
+        bash scripts/apim/verify-order-delivery-status-apim.sh

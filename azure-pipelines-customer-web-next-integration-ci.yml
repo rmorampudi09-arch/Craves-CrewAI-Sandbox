@@ -1,0 +1,47 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  appPath: apps/customer-web-next
+
+steps:
+  - checkout: self
+    clean: true
+
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: 24.x
+
+  - script: npm ci --no-audit --no-fund
+    displayName: Install locked customer-web dependencies
+    workingDirectory: $(appPath)
+
+  - script: npm run lint
+    displayName: Lint customer web
+    workingDirectory: $(appPath)
+
+  - script: npm run typecheck
+    displayName: Type-check customer web
+    workingDirectory: $(appPath)
+
+  - script: npm run test
+    displayName: Run customer-web contract and integration tests
+    workingDirectory: $(appPath)
+
+  - script: npm run build
+    displayName: Build standalone customer web
+    workingDirectory: $(appPath)
+    env:
+      CRAVES_API_BASE_URL: https://ci.invalid/api/v1
+      NEXT_PUBLIC_FIREBASE_API_KEY: ci-public-placeholder
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ci.invalid
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: craves-ci
+      NEXT_PUBLIC_FIREBASE_APP_ID: ci-app
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: "000000000000"
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: craves-ci.invalid
+      NEXT_PUBLIC_RAZORPAY_MODE: sandbox
+      NEXT_PUBLIC_CRAVES_ALLOW_CATALOG_FALLBACK: "false"

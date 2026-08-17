@@ -1,0 +1,50 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmApimWrite
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: subscriptionContainerAppName
+    type: string
+    default: ca-craves-subscription-service-p
+  - name: apimHost
+    type: string
+    default: api.craves.in
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - script: |
+      set -euo pipefail
+      CONFIRM='${{ parameters.confirmApimWrite }}'
+      if [[ "${CONFIRM,,}" != "true" ]]; then
+        echo 'ERROR: confirmApimWrite must be true before changing core Subscription APIM routes.' >&2
+        exit 1
+      fi
+    displayName: Confirm core Subscription APIM write
+
+  - task: AzureCLI@2
+    displayName: Configure and verify core Subscription APIM routes
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        export RG='${{ parameters.resourceGroupName }}'
+        export APIM='${{ parameters.apimName }}'
+        export SUB_APP='${{ parameters.subscriptionContainerAppName }}'
+        export APIM_HOST='${{ parameters.apimHost }}'
+
+        bash scripts/configure-subscription-apim.sh
+        bash scripts/apim/status-core-subscriptions-apim.sh

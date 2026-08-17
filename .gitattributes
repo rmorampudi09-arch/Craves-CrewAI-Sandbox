@@ -1,0 +1,6 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Markdown permits two trailing spaces as an intentional hard line break.
+# Keep git diff --check strict for source/YAML while avoiding false positives in docs.
+*.md whitespace=-blank-at-eol

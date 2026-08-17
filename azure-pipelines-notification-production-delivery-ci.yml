@@ -1,0 +1,36 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/notification-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify Notification Service
+
+  - bash: |
+      set -euo pipefail
+      config='services/notification-service/src/main/resources/application.yml'
+      grep -Fq 'CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED:false' "$config"
+      grep -Fq 'CRAVES_NOTIFICATION_PUSH_ENABLED:false' "$config"
+      grep -Fq 'CRAVES_NOTIFICATION_EMAIL_ENABLED:false' "$config"
+      grep -Fq 'firebase-admin.version>9.4.3' services/notification-service/pom.xml
+      grep -Fq 'azure.communication.email.version>1.1.2' services/notification-service/pom.xml
+      ! grep -RIn 'deviceToken()' \
+        services/notification-service/src/main/java/in/craves/notification/api
+      ! grep -RInE 'logger\..*(device_token|service.account|connection.string|ACS_EMAIL_CONNECTION_STRING)' \
+        services/notification-service/src/main/java
+    displayName: Verify provider and secret safety

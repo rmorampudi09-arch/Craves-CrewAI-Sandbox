@@ -1,0 +1,37 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/mobile/customer-app
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test mobile chef catalog
+  - script: |
+      set -euo pipefail
+      grep -q '/kitchens/me/menu-items' apps/mobile/customer-app/src/chef/kitchen-menu-api.ts
+      if grep -REn '(identityId|kitchenId|blobName|blobContainer|AsyncStorage|console\.(log|debug))' \
+        apps/mobile/customer-app/src/chef/kitchen-menu-* \
+        apps/mobile/customer-app/src/screens/ChefKitchenScreen.tsx \
+        apps/mobile/customer-app/src/screens/ChefMenuEditorScreen.tsx --exclude='*.test.ts'; then
+        echo 'ERROR: Mobile chef catalog exposes private fields, insecure storage or logs.' >&2
+        exit 1
+      fi
+      if grep -REn '(DocumentPicker|ImagePicker|launchImageLibrary)' apps/mobile/customer-app/src; then
+        echo 'ERROR: Unreviewed native image picker was introduced.' >&2
+        exit 1
+      fi
+      if grep -REn 'console\.(log|debug).*accessToken|accessToken.*console\.(log|debug)' apps/mobile/customer-app/src; then
+        echo 'ERROR: Mobile runtime logs an access token.' >&2
+        exit 1
+      fi
+      echo 'Mobile chef catalog privacy and native-media gates passed.'
+    displayName: Verify mobile chef catalog safety gates

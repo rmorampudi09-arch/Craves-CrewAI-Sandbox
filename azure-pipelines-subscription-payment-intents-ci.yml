@@ -1,0 +1,35 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/integration-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify Integration Service
+
+  - bash: |
+      set -euo pipefail
+      config='services/integration-service/src/main/resources/application.yml'
+      grep -Fq 'CRAVES_SUBSCRIPTION_PAYMENT_CONSUMER_ENABLED:false' "$config"
+      grep -Fq 'CRAVES_SUBSCRIPTION_PAYMENT_STATUS_PUBLISHER_ENABLED:false' "$config"
+      grep -Fq "CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED" \
+        services/integration-service/src/main/java/in/craves/integration/config/PaymentProviderProperties.java
+      grep -Fq 'SUBSCRIPTION_PAYMENT_REQUESTED' \
+        services/integration-service/src/main/java/in/craves/integration/subscription/SubscriptionPaymentModels.java
+      grep -Fq 'SUBSCRIPTION_PAYMENT_STATUS_CHANGED' \
+        services/integration-service/src/main/java/in/craves/integration/subscription/SubscriptionPaymentModels.java
+    displayName: Verify subscription payment safety contract

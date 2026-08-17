@@ -1,0 +1,54 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: containerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: serviceBusNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+  - name: serviceBusFullyQualifiedNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6.servicebus.windows.net
+  - name: topicName
+    type: string
+    default: craves-domain-events
+  - name: subscriptionName
+    type: string
+    default: order-service-delivery-status-changed
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - script: |
+      set -euo pipefail
+      bash -n scripts/release/order-delivery-status-consumer-enable-v2.sh
+      echo 'Activation helper shell syntax: PASS'
+    displayName: Validate activation helper syntax
+
+  - task: AzureCLI@2
+    displayName: Enable DELIVERY_STATUS_CHANGED consumer safely
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        bash scripts/release/order-delivery-status-consumer-enable-v2.sh \
+          '${{ parameters.resourceGroupName }}' \
+          '${{ parameters.containerAppName }}' \
+          '${{ parameters.integrationContainerAppName }}' \
+          '${{ parameters.serviceBusNamespace }}' \
+          '${{ parameters.serviceBusFullyQualifiedNamespace }}' \
+          '${{ parameters.topicName }}' \
+          '${{ parameters.subscriptionName }}'

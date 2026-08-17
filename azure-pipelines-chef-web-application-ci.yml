@@ -1,0 +1,33 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Build and test chef application
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-chef-application-apim.sh
+      grep -q '__CHEF_APPLICATION_BACKEND_URL__' infra/apim/chef-application/chef-application-policy.xml
+      if grep -REn '(blobContainer|blobName|reviewedByIdentityId|localStorage|sessionStorage|console\.(log|debug))' \
+        apps/customer-web-next/src/app/chef/application \
+        apps/customer-web-next/src/components/chef-application-workspace.tsx \
+        apps/customer-web-next/src/app/api/chef/application --exclude='*.test.ts'; then
+        echo 'ERROR: Chef application runtime exposes private storage/review fields or insecure browser behavior.' >&2
+        exit 1
+      fi
+      echo 'Chef application privacy and APIM static gates passed.'
+    displayName: Verify chef application safety gates

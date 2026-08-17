@@ -1,0 +1,312 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: releaseMode
+    displayName: Backend action
+    type: string
+    default: VERIFY_ONLY
+    values:
+      - VERIFY_ONLY
+      - BUILD_IMAGES
+      - DEPLOY_BACKEND
+      - REPAIR_CATALOG_HEALTH_AND_DEPLOY
+  - name: confirmBuild
+    displayName: Type BUILD_SEVEN_SERVICES for image build modes
+    type: string
+    default: DO_NOT_BUILD
+  - name: confirmDeployment
+    displayName: Type DEPLOY_SEVEN_SERVICES for deployment modes
+    type: string
+    default: DO_NOT_DEPLOY
+  - name: databaseBackupConfirmation
+    displayName: Type DATABASE_BACKUP_VERIFIED for deployment modes
+    type: string
+    default: DATABASE_BACKUP_NOT_VERIFIED
+  - name: reuseSourceSha
+    displayName: Verified source SHA whose unchanged service images may be reused by repair mode
+    type: string
+    default: d26ce4cd4f501ba7c77d1ab5f89bd15296af69a6
+  - name: resourceGroupName
+    displayName: Azure resource group
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: containerRegistryName
+    displayName: Azure Container Registry
+    type: string
+    default: cravesprodlowacr82121
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  backendPack: config/production/backend-completion-pack.json
+
+stages:
+  - stage: SourceIntegrity
+    displayName: Backend source and release-contract checks
+    jobs:
+      - job: ValidateBackendSource
+        displayName: Validate backend-only source
+        steps:
+          - checkout: self
+            persistCredentials: false
+            fetchDepth: 0
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.12'
+            displayName: Use Python 3.12
+          - bash: |
+              set -euo pipefail
+              python -m pip install --disable-pip-version-check --no-cache-dir 'PyYAML==6.0.2'
+              bash scripts/release/validate-backend-completion-pack.sh
+              bash scripts/release/validate-internal-admin-rbac.sh
+              bash scripts/release/scan-secret-material.sh .
+              python scripts/release/validate-flyway-migrations.py
+              while IFS= read -r service_path; do
+                bash scripts/release/validate-dockerfiles.sh "$service_path"
+              done < <(jq -r '.services[].path' '$(backendPack)')
+            displayName: Run backend source gates
+          - bash: |
+              set -euo pipefail
+              evidence='$(Build.ArtifactStagingDirectory)/backend-source-evidence'
+              mkdir -p "$evidence"
+              cp '$(backendPack)' "$evidence/backend-completion-pack.json"
+              git rev-parse HEAD >"$evidence/source-sha.txt"
+              git status --porcelain >"$evidence/git-status.txt"
+              test ! -s "$evidence/git-status.txt"
+              jq -n \
+                --arg sourceSha '$(Build.SourceVersion)' \
+                --arg mode '${{ parameters.releaseMode }}' \
+                --arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{schemaVersion:1,sourceSha:$sourceSha,releaseMode:$mode,generatedAt:$generatedAt,webChanged:false,mobileChanged:false,externalProviderActivated:false}' \
+                >"$evidence/source-manifest.json"
+            displayName: Generate immutable source evidence
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/backend-source-evidence
+              artifact: backend-source-evidence
+            displayName: Publish backend source evidence
+
+  - stage: MavenVerification
+    displayName: Compile and test required Spring Boot services
+    dependsOn: SourceIntegrity
+    condition: succeeded()
+    jobs:
+      - job: MavenVerify
+        displayName: Java 21 Maven clean verify
+        timeoutInMinutes: 120
+        steps:
+          - checkout: self
+            persistCredentials: false
+          - task: JavaToolInstaller@0
+            inputs:
+              versionSpec: '21'
+              jdkArchitectureOption: x64
+              jdkSourceOption: PreInstalled
+            displayName: Use Java 21
+          - bash: |
+              set -euo pipefail
+              mode='${{ parameters.releaseMode }}'
+              if [[ "$mode" == 'REPAIR_CATALOG_HEALTH_AND_DEPLOY' ]]; then
+                service_paths=('services/catalog-service')
+              else
+                mapfile -t service_paths < <(jq -r '.services[].path' '$(backendPack)')
+              fi
+
+              for service_path in "${service_paths[@]}"; do
+                echo "========== MAVEN VERIFY $service_path =========="
+                (cd "$service_path" && mvn -B -ntp clean verify)
+              done
+            displayName: Verify required backend services
+          - task: PublishTestResults@2
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: '**/target/surefire-reports/TEST-*.xml'
+              failTaskOnFailedTests: true
+              failTaskOnMissingResultsFile: false
+              testRunTitle: Craves backend verification
+            displayName: Publish backend test results
+
+  - stage: ImageBuild
+    displayName: Build or reuse immutable seven-service images
+    dependsOn: MavenVerification
+    condition: and(succeeded(), ne('${{ parameters.releaseMode }}', 'VERIFY_ONLY'))
+    jobs:
+      - job: BuildImages
+        displayName: Build in ACR and record digests
+        timeoutInMinutes: 180
+        steps:
+          - checkout: self
+            persistCredentials: false
+            fetchDepth: 0
+          - bash: |
+              set -euo pipefail
+              [[ '${{ parameters.confirmBuild }}' == 'BUILD_SEVEN_SERVICES' ]] || {
+                echo 'ERROR: confirmBuild must be BUILD_SEVEN_SERVICES.' >&2
+                exit 1
+              }
+            displayName: Verify explicit build confirmation
+          - task: AzureCLI@2
+            displayName: Prepare seven immutable backend images without deployment
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                set +x
+                pack='$(backendPack)'
+                registry='${{ parameters.containerRegistryName }}'
+                mode='${{ parameters.releaseMode }}'
+                reuse_source='${{ parameters.reuseSourceSha }}'
+                current_source='$(Build.SourceVersion)'
+                expected_registry=$(jq -r '.azure.containerRegistry' "$pack")
+
+                [[ "$registry" == "$expected_registry" ]] || {
+                  echo "ERROR: containerRegistryName must match the guarded backend inventory: $expected_registry" >&2
+                  exit 1
+                }
+                [[ "$current_source" =~ ^[0-9a-f]{40}$ ]] || {
+                  echo 'ERROR: Build.SourceVersion must be a full Git commit SHA.' >&2
+                  exit 1
+                }
+
+                if [[ "$mode" == 'REPAIR_CATALOG_HEALTH_AND_DEPLOY' ]]; then
+                  [[ "$reuse_source" =~ ^[0-9a-f]{40}$ ]] || {
+                    echo 'ERROR: reuseSourceSha must be a full Git commit SHA in repair mode.' >&2
+                    exit 1
+                  }
+                  git cat-file -e "${reuse_source}^{commit}" || {
+                    echo "ERROR: reuseSourceSha commit is not available: $reuse_source" >&2
+                    exit 1
+                  }
+
+                  while IFS= read -r service; do
+                    key=$(jq -r '.key' <<<"$service")
+                    path=$(jq -r '.path' <<<"$service")
+                    if [[ "$key" != 'catalog' ]]; then
+                      git diff --quiet "$reuse_source" "$current_source" -- "$path" || {
+                        echo "ERROR: $path changed after $reuse_source and its previous image cannot be reused." >&2
+                        exit 1
+                      }
+                    fi
+                  done < <(jq -c '.services[]' "$pack")
+                fi
+
+                output='$(Build.ArtifactStagingDirectory)/backend-image-manifest'
+                mkdir -p "$output"
+                events="$output/images.jsonl"
+                : >"$events"
+
+                while IFS= read -r service; do
+                  key=$(jq -r '.key' <<<"$service")
+                  path=$(jq -r '.path' <<<"$service")
+                  repository=$(jq -r '.imageRepository' <<<"$service")
+                  image_source="$current_source"
+
+                  if [[ "$mode" == 'REPAIR_CATALOG_HEALTH_AND_DEPLOY' && "$key" != 'catalog' ]]; then
+                    image_source="$reuse_source"
+                    echo "========== REUSE VERIFIED IMAGE $key -> $repository:$image_source =========="
+                  else
+                    echo "========== ACR BUILD $key -> $repository:$image_source =========="
+                    az acr build \
+                      --registry "$registry" \
+                      --image "$repository:$image_source" \
+                      --file "$path/Dockerfile" \
+                      "$path" \
+                      --only-show-errors
+                  fi
+
+                  digest=$(az acr repository show \
+                    --name "$registry" \
+                    --image "$repository:$image_source" \
+                    --query digest \
+                    --output tsv \
+                    --only-show-errors)
+                  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+                    echo "ERROR: digest missing for $repository:$image_source" >&2
+                    exit 1
+                  }
+
+                  jq -cn \
+                    --arg serviceKey "$key" \
+                    --arg repository "$repository" \
+                    --arg tag "$image_source" \
+                    --arg sourceSha "$image_source" \
+                    --arg digest "$digest" \
+                    '{serviceKey:$serviceKey,repository:$repository,tag:$tag,sourceSha:$sourceSha,digest:$digest}' \
+                    >>"$events"
+                done < <(jq -c '.services[]' "$pack")
+
+                jq -s '.' "$events" >"$output/images.json"
+                rm -f "$events"
+                jq -n \
+                  --arg registry "$registry" \
+                  --arg sourceSha "$current_source" \
+                  --arg buildId '$(Build.BuildId)' \
+                  --arg releaseMode "$mode" \
+                  --arg reusedSourceSha "$reuse_source" \
+                  --arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                  --argjson images "$(cat "$output/images.json")" \
+                  '{schemaVersion:1,registry:$registry,sourceSha:$sourceSha,buildId:$buildId,releaseMode:$releaseMode,reusedSourceSha:$reusedSourceSha,generatedAt:$generatedAt,deploymentExecuted:false,images:$images}' \
+                  >"$output/manifest.json"
+                jq -e '.deploymentExecuted == false and (.images | length == 7)' "$output/manifest.json" >/dev/null
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/backend-image-manifest
+              artifact: backend-image-manifest
+            displayName: Publish immutable backend image manifest
+
+  - stage: DeployBackend
+    displayName: Deploy the seven-service backend release
+    dependsOn: ImageBuild
+    condition: and(succeeded(), or(eq('${{ parameters.releaseMode }}', 'DEPLOY_BACKEND'), eq('${{ parameters.releaseMode }}', 'REPAIR_CATALOG_HEALTH_AND_DEPLOY')))
+    jobs:
+      - job: DeploySevenServices
+        displayName: Digest-pinned deployment with full-release rollback
+        timeoutInMinutes: 120
+        steps:
+          - checkout: self
+            persistCredentials: false
+            fetchDepth: 1
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: current
+              artifactName: backend-image-manifest
+              targetPath: $(Pipeline.Workspace)/backend-image-manifest
+            displayName: Download current-run image manifest
+          - task: AzureCLI@2
+            displayName: Deploy backend without changing runtime configuration
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                set +x
+                pack='$(backendPack)'
+                resource_group='${{ parameters.resourceGroupName }}'
+                expected_resource_group=$(jq -r '.azure.resourceGroup' "$pack")
+                [[ "$resource_group" == "$expected_resource_group" ]] || {
+                  echo "ERROR: resourceGroupName must match the guarded backend inventory: $expected_resource_group" >&2
+                  exit 1
+                }
+                bash scripts/release/deploy-backend-release.sh \
+                  "$resource_group" \
+                  "$pack" \
+                  '$(Pipeline.Workspace)/backend-image-manifest/manifest.json' \
+                  '$(Build.ArtifactStagingDirectory)/backend-deployment-evidence' \
+                  '$(Build.SourceVersion)'
+            env:
+              CONFIRM_DEPLOYMENT: ${{ parameters.confirmDeployment }}
+              DATABASE_BACKUP_CONFIRMATION: ${{ parameters.databaseBackupConfirmation }}
+              SMOKE_ATTEMPTS: '18'
+              SMOKE_SLEEP_SECONDS: '10'
+          - task: PublishPipelineArtifact@1
+            condition: always()
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/backend-deployment-evidence
+              artifact: backend-deployment-evidence
+            displayName: Publish deployment and rollback evidence

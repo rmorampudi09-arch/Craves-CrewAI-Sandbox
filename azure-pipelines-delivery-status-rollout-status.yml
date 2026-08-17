@@ -1,0 +1,73 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: serviceBusNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+  - name: topicName
+    type: string
+    default: craves-domain-events
+  - name: orderSubscriptionName
+    type: string
+    default: order-service-delivery-status-changed
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: AzureCLI@2
+    displayName: Read delivery status rollout state
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        RG='${{ parameters.resourceGroupName }}'
+        ORDER_APP='${{ parameters.orderContainerAppName }}'
+        INTEGRATION_APP='${{ parameters.integrationContainerAppName }}'
+        NS='${{ parameters.serviceBusNamespace }}'
+        TOPIC='${{ parameters.topicName }}'
+        SUB='${{ parameters.orderSubscriptionName }}'
+
+        echo "========== ORDER SERVICE =========="
+        az containerapp show \
+          --resource-group "$RG" \
+          --name "$ORDER_APP" \
+          --query "{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,running:properties.runningStatus,deliveryStatusConsumer:properties.template.containers[0].env[?name=='CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED']|[0].value,notificationDispatcher:properties.template.containers[0].env[?name=='CRAVES_NOTIFICATION_OUTBOX_DISPATCHER_ENABLED']|[0].value}" \
+          -o json
+
+        echo "========== INTEGRATION SERVICE =========="
+        az containerapp show \
+          --resource-group "$RG" \
+          --name "$INTEGRATION_APP" \
+          --query "{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,running:properties.runningStatus,delivery:properties.template.containers[0].env[?name=='CRAVES_DELIVERY_COMMAND_ENABLED']|[0].value,createReconciliation:properties.template.containers[0].env[?name=='CRAVES_DELIVERY_RECONCILIATION_ENABLED']|[0].value,webhook:properties.template.containers[0].env[?name=='CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED']|[0].value,tracking:properties.template.containers[0].env[?name=='CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED']|[0].value,statusPublisher:properties.template.containers[0].env[?name=='CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED']|[0].value,borzo:properties.template.containers[0].env[?name=='BORZO_API_ENABLED']|[0].value}" \
+          -o json
+
+        echo "========== SERVICE BUS SUBSCRIPTION =========="
+        az servicebus topic subscription show \
+          --resource-group "$RG" \
+          --namespace-name "$NS" \
+          --topic-name "$TOPIC" \
+          --name "$SUB" \
+          --query "{name:name,status:status,activeMessageCount:countDetails.activeMessageCount,deadLetterMessageCount:countDetails.deadLetterMessageCount,maxDeliveryCount:maxDeliveryCount,lockDuration:lockDuration}" \
+          -o json
+
+        echo "========== FILTER RULES =========="
+        az servicebus topic subscription rule list \
+          --resource-group "$RG" \
+          --namespace-name "$NS" \
+          --topic-name "$TOPIC" \
+          --subscription-name "$SUB" \
+          --query "[].{name:name,filterType:filterType,sqlFilter:sqlFilter.sqlExpression}" \
+          -o table

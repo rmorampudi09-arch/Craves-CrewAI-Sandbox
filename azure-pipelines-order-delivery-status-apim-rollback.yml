@@ -1,0 +1,50 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: apiId
+    type: string
+    default: ''
+  - name: confirmOperationRollback
+    type: boolean
+    default: false
+  - name: deleteEmptyDedicatedApi
+    type: boolean
+    default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/rollback-order-delivery-status-apim.sh
+      CONFIRM='${{ parameters.confirmOperationRollback }}'
+      if [[ "${CONFIRM,,}" != 'true' ]]; then
+        echo 'ERROR: confirmOperationRollback must be true.' >&2
+        exit 1
+      fi
+    displayName: Confirm APIM operation rollback
+
+  - task: AzureCLI@2
+    displayName: Remove only the customer delivery-status APIM operation
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        export RG='${{ parameters.resourceGroupName }}'
+        export APIM='${{ parameters.apimName }}'
+        export API_ID='${{ parameters.apiId }}'
+        export CONFIRM_OPERATION_ROLLBACK='${{ parameters.confirmOperationRollback }}'
+        export DELETE_EMPTY_DEDICATED_API='${{ parameters.deleteEmptyDedicatedApi }}'
+        bash scripts/apim/rollback-order-delivery-status-apim.sh

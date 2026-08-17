@@ -1,0 +1,24 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    persistCredentials: false
+    fetchDepth: 1
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.12'
+    displayName: Use Python 3.12
+  - script: |
+      set -euo pipefail
+      export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+      export CRAVES_RELEASE_MANIFEST="$(Build.ArtifactStagingDirectory)/release-manifest.json"
+      python scripts/release/generate-release-manifest.py
+      jq -e '.dirty == false and (.files | length > 0)' "$CRAVES_RELEASE_MANIFEST" >/dev/null
+    displayName: Generate immutable release manifest
+  - publish: $(Build.ArtifactStagingDirectory)/release-manifest.json
+    artifact: craves-release-manifest
+    displayName: Publish release manifest artifact

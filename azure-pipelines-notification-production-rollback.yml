@@ -1,0 +1,59 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmNotificationRollback
+    type: boolean
+    default: false
+
+variables:
+  resourceGroup: rg-craves-prodlow-centralindia
+  containerApp: ca-craves-notification-service-p
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+
+  - ${{ if eq(parameters.confirmNotificationRollback, true) }}:
+    - task: AzureCLI@2
+      displayName: Disable notification external delivery
+      inputs:
+        azureSubscription: $(AZURE_SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          rg='$(resourceGroup)'
+          app='$(containerApp)'
+
+          az containerapp update -g "$rg" -n "$app" --set-env-vars \
+            CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED=false \
+            CRAVES_NOTIFICATION_PUSH_ENABLED=false \
+            CRAVES_NOTIFICATION_EMAIL_ENABLED=false >/dev/null
+
+          latest="$(az containerapp show -g "$rg" -n "$app" --query properties.latestRevisionName -o tsv)"
+          active=''
+          provisioning=''
+          replicas='0'
+          for _ in $(seq 1 60); do
+            active="$(az containerapp revision show -g "$rg" -n "$app" --revision "$latest" --query properties.active -o tsv 2>/dev/null || true)"
+            provisioning="$(az containerapp revision show -g "$rg" -n "$app" --revision "$latest" --query properties.provisioningState -o tsv 2>/dev/null || true)"
+            replicas="$(az containerapp revision show -g "$rg" -n "$app" --revision "$latest" --query properties.replicas -o tsv 2>/dev/null || echo 0)"
+            [[ "$active" == 'true' && "$provisioning" == 'Provisioned' && "$replicas" -ge 1 ]] && break
+            sleep 10
+          done
+          [[ "$active" == 'true' && "$provisioning" == 'Provisioned' && "$replicas" -ge 1 ]] || { echo 'Rollback revision did not become active.' >&2; exit 2; }
+
+          env_json="$(az containerapp show -g "$rg" -n "$app" --query 'properties.template.containers[0].env' -o json)"
+          value() { jq -r --arg name "$1" '.[] | select(.name == $name) | (.value // "")' <<<"$env_json" | tail -1; }
+          [[ "$(value CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED)" == 'false' ]]
+          [[ "$(value CRAVES_NOTIFICATION_PUSH_ENABLED)" == 'false' ]]
+          [[ "$(value CRAVES_NOTIFICATION_EMAIL_ENABLED)" == 'false' ]]
+
+  - ${{ if ne(parameters.confirmNotificationRollback, true) }}:
+    - bash: |
+        echo 'confirmNotificationRollback must be true.' >&2
+        exit 2
+      displayName: Block unconfirmed rollback

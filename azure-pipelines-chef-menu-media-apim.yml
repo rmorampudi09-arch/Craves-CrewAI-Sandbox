@@ -1,0 +1,34 @@
+trigger: none
+pr: none
+parameters:
+  - name: confirmConfigureChefMenuMedia
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: catalogContainerAppName
+    type: string
+    default: ca-craves-catalog-service-prodlo
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - script: |
+      set -euo pipefail
+      CONFIRM='${{ parameters.confirmConfigureChefMenuMedia }}'
+      [[ "${CONFIRM,,}" == 'true' ]] || { echo 'ERROR: confirmConfigureChefMenuMedia must be true.' >&2; exit 1; }
+      bash -n scripts/apim/configure-chef-menu-media-apim.sh
+    displayName: Confirm and validate menu media APIM
+  - task: AzureCLI@2
+    displayName: Configure menu media operations
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        RG='${{ parameters.resourceGroupName }}' APIM='${{ parameters.apimName }}' CATALOG_APP='${{ parameters.catalogContainerAppName }}' bash scripts/apim/configure-chef-menu-media-apim.sh

@@ -1,0 +1,296 @@
+trigger: none
+pr: none
+
+variables:
+  AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection
+  DELIVERY_PRODUCTIONIZATION_BASE_SHA: f0b4c27973bb987bccf68bb1f1a44e1250d94bd4
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+    fetchDepth: 0
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/integration-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify Integration Service and delivery-provider tests
+
+  - bash: |
+      set -euo pipefail
+      cd services/order-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify Order Service delivery event contract
+
+  - bash: |
+      set -euo pipefail
+
+      required=(
+        azure-pipelines-delivery-provider-production-ci.yml
+        azure-pipelines-integration-service.yml
+        azure-pipelines-delivery-provider-webhooks-apim.yml
+        azure-pipelines-delivery-provider-production-activation.yml
+        azure-pipelines-delivery-provider-coordinated-activation.yml
+        azure-pipelines-shadowfax-environment.yml
+        azure-pipelines-porter-environment.yml
+        azure-pipelines-shiprocket-production-activation.yml
+        azure-pipelines-delhivery-environment.yml
+      )
+
+      for file in "${required[@]}"; do
+        [[ -f "$file" ]] || {
+          echo "ERROR: Required delivery pipeline is missing: $file" >&2
+          exit 2
+        }
+        echo "PASS: $file"
+      done
+    displayName: Verify complete delivery pipeline chain exists
+
+  - bash: |
+      set -euo pipefail
+      integration=services/integration-service/src/main/resources/application.yml
+      order=services/order-service/src/main/resources/application.yml
+
+      grep -Fq 'enabled: ${BORZO_API_ENABLED:false}' "$integration"
+      grep -Fq 'production-activation-approved: ${BORZO_PRODUCTION_ACTIVATION_APPROVED:false}' "$integration"
+      grep -Fq 'enabled: ${SHIPROCKET_API_ENABLED:false}' "$integration"
+      grep -Fq 'create-enabled: ${SHIPROCKET_CREATE_ENABLED:false}' "$integration"
+      grep -Fq 'environment: ${SHIPROCKET_API_ENVIRONMENT:READ_ONLY}' "$integration"
+      grep -Fq 'production-activation-approved: ${SHIPROCKET_PRODUCTION_ACTIVATION_APPROVED:false}' "$integration"
+      grep -Fq 'attribution-approved: ${SHIPROCKET_ATTRIBUTION_APPROVED:false}' "$integration"
+      grep -Fq 'enabled: ${CRAVES_DELIVERY_COMMAND_ENABLED:false}' "$integration"
+      grep -Fq 'reconciliation-enabled: ${CRAVES_DELIVERY_RECONCILIATION_ENABLED:false}' "$integration"
+      grep -Fq 'webhook-processing-enabled: ${CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED:false}' "$integration"
+      grep -Fq 'tracking-reconciliation-enabled: ${CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED:false}' "$integration"
+      grep -Fq 'status-publisher-enabled: ${CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED:false}' "$integration"
+
+      grep -Fq 'enabled: ${CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED:false}' "$order"
+      grep -Fq 'enabled: ${CRAVES_DOMAIN_EVENT_OUTBOX_ENABLED:false}' "$order"
+      grep -Fq 'enabled: ${CRAVES_DOMAIN_EVENT_SERVICE_BUS_ENABLED:false}' "$order"
+    displayName: Verify runtime remains fail closed by default
+
+  - bash: |
+      set -euo pipefail
+      migration=services/integration-service/src/main/resources/db/migration/V110__multi_provider_catalog_and_pickup_mapping.sql
+
+      [[ -f "$migration" ]] || {
+        echo "ERROR: Missing multi-provider migration: $migration" >&2
+        exit 2
+      }
+      for provider in shiprocket shadowfax porter delhivery; do
+        grep -Fq "'${provider}'" "$migration" || {
+          echo "ERROR: $provider is missing from the multi-provider catalog migration." >&2
+          exit 2
+        }
+      done
+      grep -Fq 'CREATE TABLE IF NOT EXISTS delivery_schema.delivery_provider_pickup_location' "$migration"
+      grep -Fq 'is_verified                 BOOLEAN NOT NULL DEFAULT FALSE' "$migration"
+      grep -Fq 'ON CONFLICT (provider_id) DO UPDATE SET' "$migration"
+
+      conflict_block="$(sed -n '/ON CONFLICT (provider_id) DO UPDATE SET/,/CREATE TABLE IF NOT EXISTS/p' "$migration")"
+      if grep -Eq '(^|[[:space:]])is_active[[:space:]]*=' <<<"$conflict_block"; then
+        echo 'ERROR: Provider catalog migration must never activate/deactivate an existing provider on conflict.' >&2
+        exit 2
+      fi
+    displayName: Verify provider catalog migration remains activation-neutral
+
+  - bash: |
+      set -euo pipefail
+
+      shiprocket_dir=services/integration-service/src/main/java/in/craves/integration/delivery/shiprocket
+      test_dir=services/integration-service/src/test/java/in/craves/integration/delivery/shiprocket
+
+      for file in \
+        ShiprocketApiClient.java \
+        ShiprocketAuthClient.java \
+        ShiprocketTransport.java \
+        ShiprocketStatusMapper.java \
+        ShiprocketWebhookInboxRepository.java \
+        ShiprocketWebhookService.java \
+        ShiprocketWebhookNormalizer.java \
+        ShiprocketWebhookController.java
+      do
+        [[ -f "$shiprocket_dir/$file" ]] || {
+          echo "ERROR: Missing Shiprocket source file $file" >&2
+          exit 2
+        }
+      done
+      [[ -f services/integration-service/src/main/java/in/craves/integration/config/ShiprocketProperties.java ]]
+      [[ -f "$test_dir/ShiprocketStatusMapperTest.java" ]]
+      [[ -f "$test_dir/ShiprocketStatusIdSpaceTest.java" ]]
+      [[ -f "$test_dir/ShiprocketWebhookNormalizerTest.java" ]]
+      [[ -f "$test_dir/ShiprocketWebhookServiceTest.java" ]]
+      [[ -f services/integration-service/src/test/java/in/craves/integration/config/ShiprocketPropertiesTest.java ]]
+      [[ -f services/integration-service/src/test/java/in/craves/integration/delivery/production/DeliveryProviderReadinessServiceTest.java ]]
+
+      grep -R -Fq '@PostMapping("/p4")' "$shiprocket_dir"
+      grep -R -Fq 'x-api-key' "$shiprocket_dir"
+      grep -R -Fq 'shipment_status_id' "$shiprocket_dir"
+      grep -R -Fq '_craves_received_at' "$shiprocket_dir"
+
+      if grep -R -Fq '@PostMapping("/shiprocket")' "$shiprocket_dir"; then
+        echo 'ERROR: Shiprocket callback must remain on the provider-neutral /p4 route.' >&2
+        exit 2
+      fi
+    displayName: Verify executable Shiprocket adapter and neutral webhook path
+
+  - bash: |
+      set -euo pipefail
+      shiprocket=azure-pipelines-shiprocket-production-activation.yml
+      borzo=azure-pipelines-delivery-provider-production-activation.yml
+      coordinated=azure-pipelines-delivery-provider-coordinated-activation.yml
+      apim=azure-pipelines-delivery-provider-webhooks-apim.yml
+
+      grep -A6 -F -- '- name: targetEnvironment' "$shiprocket" | grep -Fq 'default: READ_ONLY'
+      grep -A4 -F -- '- name: enableProvider' "$shiprocket" | grep -Fq 'default: false'
+      grep -A4 -F -- '- name: enableCreate' "$shiprocket" | grep -Fq 'default: false'
+      grep -A4 -F -- '- name: confirmProductionActivation' "$shiprocket" | grep -Fq 'default: false'
+      grep -A4 -F -- '- name: attributionApproved' "$shiprocket" | grep -Fq 'default: false'
+      grep -Fq 'SHIPROCKET_API_EMAIL="secretref:${email_secret}"' "$shiprocket"
+      grep -Fq 'SHIPROCKET_API_PASSWORD="secretref:${password_secret}"' "$shiprocket"
+      grep -Fq 'SHIPROCKET_WEBHOOK_TOKEN="secretref:${webhook_secret}"' "$shiprocket"
+      grep -Fq 'SHIPROCKET_CREATE_ENABLED=true' "$shiprocket"
+      grep -Fq '/api/v1/webhooks/delivery/p4' "$shiprocket"
+      grep -Fq 'delivery_provider_pickup_location' "$shiprocket"
+      grep -Fq 'CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED=true' "$shiprocket"
+      grep -Fq "status NOT IN ('DELIVERED','CANCELLED','RETURNED','FAILED')" "$shiprocket"
+
+      if grep -Fq 'SHIPROCKET_API_AUTH_TOKEN' "$shiprocket"; then
+        echo 'ERROR: Legacy Shiprocket single-token configuration has returned.' >&2
+        exit 2
+      fi
+
+      grep -Fq 'default: apim-craves-prodlow-l3ing6' "$borzo"
+      grep -Fq 'CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED=true' "$borzo"
+      grep -Fq "status NOT IN ('DELIVERED','CANCELLED','RETURNED','FAILED')" "$borzo"
+      grep -Fq 'CRAVES_DELIVERY_COMMAND_ENABLED=false' "$borzo"
+      grep -Fq 'CRAVES_DELIVERY_COMMAND_ENABLED=true' "$borzo"
+
+      grep -Fq 'default: apim-craves-prodlow-l3ing6' "$coordinated"
+      grep -Fq 'VENDOR_PRIVATE_API_CONTRACT_REQUIRED' "$coordinated"
+      grep -Fq 'ENTERPRISE_API_ONBOARDING_REQUIRED' "$coordinated"
+      grep -Fq 'INTRACITY_API_PRODUCT_NOT_VERIFIED' "$coordinated"
+      grep -Fq 'CRAVES_DELIVERY_COMMAND_ENABLED=false' "$coordinated"
+      grep -Fq 'CRAVES_DELIVERY_COMMAND_ENABLED=true' "$coordinated"
+      grep -Fq 'CRAVES_DOMAIN_EVENT_OUTBOX_ENABLED=true' "$coordinated"
+      grep -Fq 'CRAVES_DOMAIN_EVENT_SERVICE_BUS_ENABLED=true' "$coordinated"
+      grep -Fq 'CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED=true' "$coordinated"
+      grep -Fq "provider_id='borzo' AND status NOT IN ('DELIVERED','CANCELLED','RETURNED','FAILED')" "$coordinated"
+      grep -Fq 'expectedDeliveryQueueDeadLetterCount' "$coordinated"
+      grep -Fq 'expectedStatusSubscriptionDeadLetterCount' "$coordinated"
+
+      grep -A3 -F -- '- name: enableBorzoRoute' "$apim" | grep -Fq 'default: true'
+      grep -A3 -F -- '- name: enableShiprocketRoute' "$apim" | grep -Fq 'default: false'
+      grep -Fq "'/api/v1/webhooks/delivery/p4'" "$apim"
+      grep -Fq "'/p4'" "$apim"
+      grep -Fq "'/api/v1/webhooks/delivery/borzo'" "$apim"
+
+      if grep -Fq "'/api/v1/webhooks/delivery/shiprocket'" "$apim" || grep -Fq "'/shiprocket'" "$apim"; then
+        echo 'ERROR: APIM contains a provider-named Shiprocket public webhook route.' >&2
+        exit 2
+      fi
+
+      if grep -R -Fq 'apim-craves-prodlowl3ing6' \
+        azure-pipelines-delivery-provider-production-activation.yml \
+        azure-pipelines-delivery-provider-coordinated-activation.yml \
+        azure-pipelines-delivery-provider-webhooks-apim.yml \
+        azure-pipelines-shiprocket-production-activation.yml; then
+        echo 'ERROR: Invalid APIM resource name typo detected.' >&2
+        exit 2
+      fi
+    displayName: Verify production cutover and webhook invariants
+
+  - bash: |
+      set -euo pipefail
+
+      shadowfax=azure-pipelines-shadowfax-environment.yml
+      porter=azure-pipelines-porter-environment.yml
+      delhivery=azure-pipelines-delhivery-environment.yml
+
+      for file in "$shadowfax" "$porter" "$delhivery"; do
+        grep -A4 -F -- '- name: targetEnvironment' "$file" | grep -Fq 'default: SANDBOX'
+        grep -A3 -F -- '- name: enableProvider' "$file" | grep -Fq 'default: false'
+        grep -Fq 'SET is_active=FALSE' "$file"
+        grep -Fq 'SELECT COUNT(*) FROM delivery_schema.delivery_provider WHERE is_active=TRUE' "$file"
+        grep -Fq 'CRAVES_DELIVERY_COMMAND_ENABLED=false' "$file"
+      done
+
+      grep -Fq "adapter_dir='services/integration-service/src/main/java/in/craves/integration/delivery/shadowfax'" "$shadowfax"
+      grep -Fq 'VENDOR_PRIVATE_API_CONTRACT_REQUIRED' "$shadowfax"
+      grep -Fq "provider_id='shadowfax' AND is_active=TRUE" "$shadowfax"
+
+      grep -Fq "adapter_dir='services/integration-service/src/main/java/in/craves/integration/delivery/porter'" "$porter"
+      grep -Fq 'ENTERPRISE_API_ONBOARDING_REQUIRED' "$porter"
+      grep -Fq "provider_id='porter' AND is_active=TRUE" "$porter"
+
+      grep -Fq "adapter_dir='services/integration-service/src/main/java/in/craves/integration/delivery/delhivery'" "$delhivery"
+      grep -Fq 'INTRACITY_API_PRODUCT_NOT_VERIFIED' "$delhivery"
+      grep -Fq "provider_id='delhivery' AND is_active=TRUE" "$delhivery"
+    displayName: Verify gated providers are database fail-closed
+
+  - bash: |
+      set -euo pipefail
+
+      for file in \
+        azure-pipelines-integration-service.yml \
+        azure-pipelines-delivery-provider-webhooks-apim.yml \
+        azure-pipelines-delivery-provider-production-activation.yml \
+        azure-pipelines-delivery-provider-coordinated-activation.yml \
+        azure-pipelines-shadowfax-environment.yml \
+        azure-pipelines-porter-environment.yml \
+        azure-pipelines-shiprocket-production-activation.yml \
+        azure-pipelines-delhivery-environment.yml
+      do
+        grep -Fq 'AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection' "$file" || {
+          echo "ERROR: $file does not pin the approved Azure service connection." >&2
+          exit 2
+        }
+      done
+    displayName: Verify approved Azure service connection is pinned
+
+  - bash: |
+      set -euo pipefail
+
+      grep -Fq 'SHADOWFAX_API_AUTH_TOKEN="secretref:${secret_name}"' azure-pipelines-shadowfax-environment.yml
+      grep -Fq 'PORTER_API_AUTH_TOKEN="secretref:${secret_name}"' azure-pipelines-porter-environment.yml
+      grep -Fq 'DELHIVERY_API_AUTH_TOKEN="secretref:${secret_name}"' azure-pipelines-delhivery-environment.yml
+      grep -Fq 'BORZO_API_AUTH_TOKEN=secretref:borzo-api-auth-token' azure-pipelines-delivery-provider-production-activation.yml
+      grep -Fq 'BORZO_CALLBACK_TOKEN=secretref:borzo-callback-token' azure-pipelines-delivery-provider-production-activation.yml
+
+      if grep -R -n -E '(SHADOWFAX|PORTER|SHIPROCKET|DELHIVERY|BORZO).*(TOKEN|SECRET|PASSWORD)[[:space:]]*=[[:space:]]*[A-Za-z0-9+/=_-]{24,}' \
+        azure-pipelines-delivery-provider-production-activation.yml \
+        azure-pipelines-delivery-provider-coordinated-activation.yml \
+        azure-pipelines-shadowfax-environment.yml \
+        azure-pipelines-porter-environment.yml \
+        azure-pipelines-shiprocket-production-activation.yml \
+        azure-pipelines-delhivery-environment.yml; then
+        echo 'ERROR: A delivery provider pipeline appears to contain a plaintext credential.' >&2
+        exit 2
+      fi
+    displayName: Verify delivery provider credentials stay secret-backed
+
+  - bash: |
+      set -euo pipefail
+      base="$(DELIVERY_PRODUCTIONIZATION_BASE_SHA)"
+      git cat-file -e "${base}^{commit}"
+      git diff --check "$base" HEAD
+
+      if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+        echo 'ERROR: Validation steps modified tracked source files.' >&2
+        git status --short
+        exit 2
+      fi
+
+      echo "Delivery provider productionization safety validation completed from $base to HEAD."
+    displayName: Final source hygiene check

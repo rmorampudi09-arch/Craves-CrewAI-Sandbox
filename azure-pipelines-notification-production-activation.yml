@@ -1,0 +1,135 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: stage
+    type: string
+    default: push_config
+    values:
+      - push_config
+      - email_config
+      - worker
+  - name: confirmNotificationActivation
+    type: boolean
+    default: false
+  - name: acsSenderAddress
+    type: string
+    default: replace-before-run.invalid
+
+variables:
+  resourceGroup: rg-craves-prodlow-centralindia
+  containerApp: ca-craves-notification-service-p
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+
+  - ${{ if eq(parameters.confirmNotificationActivation, true) }}:
+    - task: AzureCLI@2
+      displayName: Apply guarded notification provider stage
+      env:
+        FIREBASE_ADMIN_JSON: $(FIREBASE_SERVICE_ACCOUNT_JSON_BASE64)
+        ACS_EMAIL_CONNECTION: $(ACS_EMAIL_CONNECTION_STRING)
+      inputs:
+        azureSubscription: $(AZURE_SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          set +x
+          rg='$(resourceGroup)'
+          app='$(containerApp)'
+          stage='${{ parameters.stage }}'
+
+          env_json="$(az containerapp show -g "$rg" -n "$app" --query 'properties.template.containers[0].env' -o json)"
+          current() { jq -r --arg name "$1" '.[] | select(.name == $name) | (.value // .secretRef // "")' <<<"$env_json" | tail -1; }
+          require_secret_variable() {
+            local name="$1" value="$2"
+            [[ -n "$value" && "$value" != "\$($name)" ]] || {
+              echo "ERROR: Secure pipeline variable $name is required for this stage." >&2
+              exit 2
+            }
+          }
+
+          case "$stage" in
+            push_config)
+              require_secret_variable FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 "${FIREBASE_ADMIN_JSON:-}"
+              [[ "$(current CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED)" != 'true' ]] || { echo 'Disable worker before provider configuration.' >&2; exit 2; }
+              az containerapp secret set -g "$rg" -n "$app" --secrets \
+                firebase-admin-json="$FIREBASE_ADMIN_JSON" -o none
+              az containerapp update -g "$rg" -n "$app" --set-env-vars \
+                CRAVES_NOTIFICATION_PUSH_ENABLED=true \
+                FIREBASE_SERVICE_ACCOUNT_JSON_BASE64=secretref:firebase-admin-json \
+                CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED=false >/dev/null
+              ;;
+            email_config)
+              sender='${{ parameters.acsSenderAddress }}'
+              require_secret_variable ACS_EMAIL_CONNECTION_STRING "${ACS_EMAIL_CONNECTION:-}"
+              [[ "$sender" == *@* && "$sender" != *replace-before-run.invalid* ]] || { echo 'A verified ACS sender address is required.' >&2; exit 2; }
+              [[ "$(current CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED)" != 'true' ]] || { echo 'Disable worker before provider configuration.' >&2; exit 2; }
+              az containerapp secret set -g "$rg" -n "$app" --secrets \
+                acs-email-conn="$ACS_EMAIL_CONNECTION" -o none
+              az containerapp update -g "$rg" -n "$app" --set-env-vars \
+                CRAVES_NOTIFICATION_EMAIL_ENABLED=true \
+                ACS_EMAIL_CONNECTION_STRING=secretref:acs-email-conn \
+                ACS_EMAIL_SENDER_ADDRESS="$sender" \
+                CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED=false >/dev/null
+              ;;
+            worker)
+              push="$(current CRAVES_NOTIFICATION_PUSH_ENABLED)"
+              email="$(current CRAVES_NOTIFICATION_EMAIL_ENABLED)"
+              [[ "$push" == 'true' || "$email" == 'true' ]] || { echo 'Configure at least one provider before enabling worker.' >&2; exit 2; }
+              if [[ "$push" == 'true' ]]; then
+                [[ "$(current FIREBASE_SERVICE_ACCOUNT_JSON_BASE64)" == 'firebase-admin-json' ]] || { echo 'Push secret reference is not configured.' >&2; exit 2; }
+              fi
+              if [[ "$email" == 'true' ]]; then
+                [[ "$(current ACS_EMAIL_CONNECTION_STRING)" == 'acs-email-conn' ]] || { echo 'ACS Email secret reference is not configured.' >&2; exit 2; }
+                [[ "$(current ACS_EMAIL_SENDER_ADDRESS)" == *@* ]] || { echo 'ACS Email sender is not configured.' >&2; exit 2; }
+              fi
+              az containerapp update -g "$rg" -n "$app" --set-env-vars \
+                CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED=true >/dev/null
+              ;;
+            *)
+              echo "ERROR: Unsupported notification activation stage $stage." >&2
+              exit 2
+              ;;
+          esac
+
+          latest="$(az containerapp show -g "$rg" -n "$app" --query properties.latestRevisionName -o tsv)"
+          active=''
+          provisioning=''
+          replicas='0'
+          for _ in $(seq 1 60); do
+            active="$(az containerapp revision show -g "$rg" -n "$app" --revision "$latest" --query properties.active -o tsv 2>/dev/null || true)"
+            provisioning="$(az containerapp revision show -g "$rg" -n "$app" --revision "$latest" --query properties.provisioningState -o tsv 2>/dev/null || true)"
+            replicas="$(az containerapp revision show -g "$rg" -n "$app" --revision "$latest" --query properties.replicas -o tsv 2>/dev/null || echo 0)"
+            [[ "$active" == 'true' && "$provisioning" == 'Provisioned' && "$replicas" -ge 1 ]] && break
+            sleep 10
+          done
+          [[ "$active" == 'true' && "$provisioning" == 'Provisioned' && "$replicas" -ge 1 ]] || { echo 'Notification revision did not become active.' >&2; exit 2; }
+
+          readback="$(az containerapp show -g "$rg" -n "$app" --query 'properties.template.containers[0].env' -o json)"
+          value() { jq -r --arg name "$1" '.[] | select(.name == $name) | (.value // .secretRef // "")' <<<"$readback" | tail -1; }
+          case "$stage" in
+            push_config)
+              [[ "$(value CRAVES_NOTIFICATION_PUSH_ENABLED)" == 'true' ]]
+              [[ "$(value FIREBASE_SERVICE_ACCOUNT_JSON_BASE64)" == 'firebase-admin-json' ]]
+              [[ "$(value CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED)" == 'false' ]]
+              ;;
+            email_config)
+              [[ "$(value CRAVES_NOTIFICATION_EMAIL_ENABLED)" == 'true' ]]
+              [[ "$(value ACS_EMAIL_CONNECTION_STRING)" == 'acs-email-conn' ]]
+              [[ "$(value CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED)" == 'false' ]]
+              ;;
+            worker)
+              [[ "$(value CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED)" == 'true' ]]
+              ;;
+          esac
+
+  - ${{ if ne(parameters.confirmNotificationActivation, true) }}:
+    - bash: |
+        echo 'confirmNotificationActivation must be true.' >&2
+        exit 2
+      displayName: Block unconfirmed notification activation

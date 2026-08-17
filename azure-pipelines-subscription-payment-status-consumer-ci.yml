@@ -1,0 +1,34 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/subscription-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify Subscription Service
+
+  - bash: |
+      set -euo pipefail
+      config='services/subscription-service/src/main/resources/application.yml'
+      grep -Fq 'CRAVES_SUBSCRIPTION_PAYMENT_STATUS_CONSUMER_ENABLED:false' "$config"
+      grep -Fq 'SUBSCRIPTION_PAYMENT_STATUS_CHANGED' \
+        services/subscription-service/src/main/java/in/craves/subscription/payment/SubscriptionPaymentStatusService.java
+      grep -Fq 'FOR UPDATE' \
+        services/subscription-service/src/main/java/in/craves/subscription/payment/SubscriptionPaymentStatusService.java
+      grep -Fq 'READY_FOR_ORDER' \
+        services/subscription-service/src/main/resources/db/migration/V6__subscription_payment_status_consumption.sql
+    displayName: Verify payment-status safety contract

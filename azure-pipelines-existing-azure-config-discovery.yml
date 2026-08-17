@@ -1,0 +1,162 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: action
+    displayName: Communication Services action
+    type: string
+    default: deploy
+    values:
+      - deploy
+      - validate
+  - name: sendTestEmail
+    displayName: Send validation email to support@craves.in
+    type: boolean
+    default: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  azureServiceConnection: Craves-Dev-Service-Connection
+  resourceGroup: rg-craves-prodlow-centralindia
+  communicationService: acs-craves-prodlow-4f897b61
+  emailService: ecs-craves-prodlow-4f897b61
+  dataLocation: India
+  notificationApp: ca-craves-notification-service-p
+  authApp: ca-craves-auth-service-prodlow
+  acrName: cravesprodlowacr82121
+  notificationImageRepository: craves/notification-service
+
+steps:
+  - checkout: self
+
+  - task: AzureCLI@2
+    displayName: Provision, connect and validate ACS Email
+    inputs:
+      azureSubscription: $(azureServiceConnection)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        set +x
+
+        ACTION='${{ parameters.action }}'
+        SEND_TEST='${{ parameters.sendTestEmail }}'
+        RG='$(resourceGroup)'
+        COMMUNICATION_SERVICE='$(communicationService)'
+        EMAIL_SERVICE='$(emailService)'
+        DATA_LOCATION='$(dataLocation)'
+        NOTIFICATION_APP='$(notificationApp)'
+        AUTH_APP='$(authApp)'
+        ACR='$(acrName)'
+        NOTIFICATION_IMAGE_REPOSITORY='$(notificationImageRepository)'
+        MANAGED_DOMAIN='AzureManagedDomain'
+        TEST_RECIPIENT='support@craves.in'
+        REPLY_TO='support@craves.in'
+
+        fail() {
+          echo "ERROR: $1" >&2
+          exit 1
+        }
+
+        az extension add --name communication --upgrade --yes --only-show-errors >/dev/null
+
+        az group show --name "$RG" --only-show-errors >/dev/null           || fail "Resource group $RG was not found"
+        az containerapp show --resource-group "$RG" --name "$NOTIFICATION_APP" --only-show-errors >/dev/null           || fail "Notification Container App $NOTIFICATION_APP was not found"
+        az containerapp show --resource-group "$RG" --name "$AUTH_APP" --only-show-errors >/dev/null           || fail "Auth Container App $AUTH_APP was not found"
+
+        if [[ "$ACTION" == 'deploy' ]]; then
+          if ! az communication email show               --resource-group "$RG"               --name "$EMAIL_SERVICE"               --only-show-errors >/dev/null 2>&1; then
+            az communication email create               --resource-group "$RG"               --name "$EMAIL_SERVICE"               --location Global               --data-location "$DATA_LOCATION"               --tags environment=prodlow application=craves managedBy=azure-devops               --only-show-errors >/dev/null
+          fi
+
+          if ! az communication email domain show               --resource-group "$RG"               --email-service-name "$EMAIL_SERVICE"               --domain-name "$MANAGED_DOMAIN"               --only-show-errors >/dev/null 2>&1; then
+            az communication email domain create               --resource-group "$RG"               --email-service-name "$EMAIL_SERVICE"               --domain-name "$MANAGED_DOMAIN"               --location Global               --domain-management AzureManaged               --only-show-errors >/dev/null
+          fi
+
+          DOMAIN_ID=$(az communication email domain show             --resource-group "$RG"             --email-service-name "$EMAIL_SERVICE"             --domain-name "$MANAGED_DOMAIN"             --query id -o tsv --only-show-errors)
+          [[ -n "$DOMAIN_ID" ]] || fail 'Azure managed email domain resource ID was not resolved'
+
+          az communication create             --resource-group "$RG"             --name "$COMMUNICATION_SERVICE"             --location Global             --data-location "$DATA_LOCATION"             --linked-domains "$DOMAIN_ID"             --tags environment=prodlow application=craves managedBy=azure-devops             --only-show-errors >/dev/null
+        fi
+
+        EMAIL_JSON=$(az communication email show           --resource-group "$RG"           --name "$EMAIL_SERVICE"           -o json --only-show-errors)
+        EMAIL_STATE=$(jq -r '.provisioningState // .properties.provisioningState // ""' <<<"$EMAIL_JSON")
+        DOMAIN_JSON=$(az communication email domain show           --resource-group "$RG"           --email-service-name "$EMAIL_SERVICE"           --domain-name "$MANAGED_DOMAIN"           -o json --only-show-errors)
+        DOMAIN_ID=$(jq -r '.id // ""' <<<"$DOMAIN_JSON")
+        DOMAIN_STATE=$(jq -r '.provisioningState // .properties.provisioningState // ""' <<<"$DOMAIN_JSON")
+        MAIL_FROM_DOMAIN=$(jq -r '.mailFromSenderDomain // .properties.mailFromSenderDomain // ""' <<<"$DOMAIN_JSON")
+        SENDER="DoNotReply@$MAIL_FROM_DOMAIN"
+        COMMUNICATION_JSON=$(az communication show           --resource-group "$RG"           --name "$COMMUNICATION_SERVICE"           -o json --only-show-errors)
+        COMMUNICATION_STATE=$(jq -r '.provisioningState // .properties.provisioningState // ""' <<<"$COMMUNICATION_JSON")
+        LINKED_DOMAIN=$(jq -r '.linkedDomains[0] // .properties.linkedDomains[0] // ""' <<<"$COMMUNICATION_JSON")
+
+        [[ "$EMAIL_STATE" == 'Succeeded' ]] || fail "Email service state is $EMAIL_STATE"
+        [[ "$DOMAIN_STATE" == 'Succeeded' ]] || fail "Managed domain state is $DOMAIN_STATE"
+        [[ "$COMMUNICATION_STATE" == 'Succeeded' ]] || fail "Communication service state is $COMMUNICATION_STATE"
+        [[ -n "$MAIL_FROM_DOMAIN" && "$SENDER" == *@*.azurecomm.net ]]           || fail 'Managed sender address was not resolved'
+        [[ "${LINKED_DOMAIN,,}" == "${DOMAIN_ID,,}" ]]           || fail 'Managed email domain is not linked to Communication Services'
+
+        if [[ "$ACTION" == 'deploy' ]]; then
+          CONNECTION_STRING=$(az communication list-key             --resource-group "$RG"             --name "$COMMUNICATION_SERVICE"             --query primaryConnectionString -o tsv --only-show-errors)
+          [[ -n "$CONNECTION_STRING" ]] || fail 'ACS primary connection string was not resolved'
+
+          AUTH_FQDN=$(az containerapp show             --resource-group "$RG"             --name "$AUTH_APP"             --query properties.configuration.ingress.fqdn -o tsv --only-show-errors)
+          AUTH_SECRET_REF=$(az containerapp show             --resource-group "$RG"             --name "$AUTH_APP"             --query "properties.template.containers[0].env[?name=='CRAVES_INTERNAL_SERVICE_SECRET'].secretRef | [0]"             -o tsv --only-show-errors)
+          [[ -n "$AUTH_FQDN" ]] || fail 'Auth Container App FQDN was not resolved'
+          [[ -n "$AUTH_SECRET_REF" ]] || fail 'Auth internal secret reference was not resolved'
+
+          NOTIFICATION_AUTH_SECRET=$(az containerapp secret list             --resource-group "$RG"             --name "$NOTIFICATION_APP"             --query "[?name=='auth-internal-secret'].name | [0]"             -o tsv --only-show-errors)
+          [[ "$NOTIFICATION_AUTH_SECRET" == 'auth-internal-secret' ]] || fail 'Protected Auth email-lookup secret is not present in Notification; run the Auth pipeline first'
+
+          az containerapp secret set             --resource-group "$RG"             --name "$NOTIFICATION_APP"             --secrets               acs-email-conn="$CONNECTION_STRING"             --only-show-errors -o none
+
+          ACR_LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv --only-show-errors)
+          NOTIFICATION_IMAGE_TAG=$(az acr repository show-tags --name "$ACR" --repository "$NOTIFICATION_IMAGE_REPOSITORY" --orderby time_desc --top 1 -o tsv --only-show-errors)
+          [[ -n "$ACR_LOGIN_SERVER" && -n "$NOTIFICATION_IMAGE_TAG" ]] || fail 'Latest Notification image was not resolved from ACR'
+          NOTIFICATION_IMAGE="$ACR_LOGIN_SERVER/$NOTIFICATION_IMAGE_REPOSITORY:$NOTIFICATION_IMAGE_TAG"
+
+          az containerapp update --resource-group "$RG" --name "$NOTIFICATION_APP" --image "$NOTIFICATION_IMAGE" --set-env-vars CRAVES_NOTIFICATION_EMAIL_ENABLED=true CRAVES_NOTIFICATION_IMPORTANT_EMAIL_ENABLED=true CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED=true ACS_EMAIL_CONNECTION_STRING=secretref:acs-email-conn ACS_EMAIL_SENDER_ADDRESS="$SENDER" ACS_EMAIL_REPLY_TO_ADDRESS="$REPLY_TO" CRAVES_AUTH_INTERNAL_BASE_URL="https://$AUTH_FQDN" CRAVES_AUTH_INTERNAL_SERVICE_SECRET=secretref:auth-internal-secret --only-show-errors -o none
+
+          if [[ "$SEND_TEST" == 'true' ]]; then
+            az communication email send               --connection-string "$CONNECTION_STRING"               --sender "$SENDER"               --to "$TEST_RECIPIENT"               --reply-to "$REPLY_TO"               --subject 'Craves email service is ready'               --text 'Azure Communication Services email is active for Craves. The production Notification Service is configured for durable important-event email delivery. The custom craves.in sender domain will be connected after DNS verification.'               --importance high               --wait-until completed               --only-show-errors -o none
+          fi
+        fi
+
+        for attempt in $(seq 1 60); do
+          APP_JSON=$(az containerapp show             --resource-group "$RG"             --name "$NOTIFICATION_APP"             -o json --only-show-errors)
+          APP_RUNNING=$(jq -r '.properties.runningStatus // ""' <<<"$APP_JSON")
+          APP_READY=$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$APP_JSON")
+          APP_LATEST=$(jq -r '.properties.latestRevisionName // ""' <<<"$APP_JSON")
+          if [[ "$APP_RUNNING" == 'Running' && "$APP_READY" == "$APP_LATEST" ]]; then
+            break
+          fi
+          [[ "$ACTION" == 'deploy' ]] || break
+          echo "Waiting for Notification Service revision readiness ($attempt/60)"
+          sleep 10
+        done
+
+        env_value() {
+          jq -r --arg name "$1"             '[.properties.template.containers[0].env[]? | select(.name == $name)][0] | (.value // .secretRef // "")'             <<<"$APP_JSON"
+        }
+
+        [[ "$APP_RUNNING" == 'Running' && "$APP_READY" == "$APP_LATEST" ]]           || fail 'Notification Service did not become ready'
+        [[ "$(env_value CRAVES_NOTIFICATION_EMAIL_ENABLED)" == 'true' ]]           || fail 'Notification email provider is not enabled'
+        [[ "$(env_value CRAVES_NOTIFICATION_IMPORTANT_EMAIL_ENABLED)" == 'true' ]]           || fail 'Important-event email fan-out is not enabled'
+        [[ "$(env_value CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED)" == 'true' ]]           || fail 'Notification delivery worker is not enabled'
+        [[ "$(env_value ACS_EMAIL_CONNECTION_STRING)" == 'acs-email-conn' ]]           || fail 'ACS connection string is not secret-bound'
+        [[ "$(env_value CRAVES_AUTH_INTERNAL_SERVICE_SECRET)" == 'auth-internal-secret' ]]           || fail 'Auth lookup secret is not secret-bound'
+        [[ "$(env_value ACS_EMAIL_REPLY_TO_ADDRESS)" == "$REPLY_TO" ]]           || fail 'Support reply-to address is not configured'
+
+        echo "SUCCESS: Craves ACS Email is active"
+        echo "Communication service: $COMMUNICATION_SERVICE"
+        echo "Email service: $EMAIL_SERVICE"
+        echo "Data location: $DATA_LOCATION"
+        echo "Managed sender: $SENDER"
+        echo "Reply-to: $REPLY_TO"
+        echo "Important-event email fan-out: enabled"
+        echo "Notification delivery worker: enabled"
+        if [[ "$SEND_TEST" == 'true' && "$ACTION" == 'deploy' ]]; then
+          echo "Validation email submitted to: $TEST_RECIPIENT"
+        fi

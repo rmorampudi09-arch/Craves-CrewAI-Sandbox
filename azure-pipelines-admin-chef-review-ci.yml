@@ -1,0 +1,45 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+  - script: |
+      set -euo pipefail
+      cd services/user-chef-service
+      mvn -B clean test
+    displayName: Compile and test User-Chef KYC review
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test admin chef review
+  - script: |
+      set -euo pipefail
+      grep -q 'ADMIN_ROLE_REQUIRED' services/user-chef-service/src/main/java/in/craves/userchef/service/ChefDocumentReviewService.java
+      grep -q 'CacheControl.noStore' services/user-chef-service/src/main/java/in/craves/userchef/web/BackofficeChefDocumentController.java
+      grep -q 'isSameOrigin' apps/customer-web-next/src/app/api/admin/chef-reviews/\[applicationId\]/approve/route.ts
+      grep -q 'parseAdminDecision' apps/customer-web-next/src/app/api/admin/chef-reviews/\[applicationId\]/reject/route.ts
+      if grep -REn '(blobContainer|blobName|identityId|reviewedByIdentityId|localStorage|sessionStorage|console\.(log|debug))' \
+        apps/customer-web-next/src/components/admin-chef-review-* \
+        apps/customer-web-next/src/app/admin/chef-reviews \
+        apps/customer-web-next/src/app/api/admin/chef-reviews --exclude='*.test.ts'; then
+        echo 'ERROR: Admin chef review runtime exposes private storage/identity fields or insecure browser behavior.' >&2
+        exit 1
+      fi
+      echo 'Admin chef review security gates passed.'
+    displayName: Verify KYC review safety gates

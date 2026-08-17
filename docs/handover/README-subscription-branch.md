@@ -1,0 +1,1 @@
+This branch contains the 2026-08-11 Subscription production-completion work. The canonical handover is `docs/handover/2026-08-11-subscription-production-completion.md`.

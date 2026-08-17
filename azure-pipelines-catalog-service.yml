@@ -1,0 +1,347 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: acrName
+    type: string
+    default: cravesprodlowacr82121
+  - name: containerAppName
+    type: string
+    default: ca-craves-catalog-service-prodlo
+  - name: imageTag
+    type: string
+    default: $(Build.BuildId)
+
+variables:
+  modulePath: services/catalog-service
+  imageRepository: craves/catalog-service
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - script: |
+      set -euo pipefail
+      cd $(modulePath)
+      mvn -B -ntp clean verify
+    displayName: Maven build and tests
+
+  - task: AzureCLI@2
+    displayName: Build and push immutable Catalog image
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        ACR='${{ parameters.acrName }}'
+        TAG='${{ parameters.imageTag }}'
+        IMAGE_REPOSITORY='$(imageRepository)'
+
+        ACR_LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv --only-show-errors)
+        [[ -n "$ACR_LOGIN_SERVER" ]] || {
+          echo 'ERROR: ACR login server was not resolved.' >&2
+          exit 1
+        }
+
+        IMAGE="$ACR_LOGIN_SERVER/$IMAGE_REPOSITORY:$TAG"
+
+        az acr login --name "$ACR" --only-show-errors
+        docker build --pull -t "$IMAGE" "$(modulePath)"
+        docker push "$IMAGE"
+
+        echo "Image pushed: $IMAGE"
+
+  - task: AzureCLI@2
+    displayName: Deploy Catalog image and preserve runtime security state
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        set +x
+
+        RG='${{ parameters.resourceGroupName }}'
+        ACR='${{ parameters.acrName }}'
+        APP='${{ parameters.containerAppName }}'
+        TAG='${{ parameters.imageTag }}'
+        IMAGE_REPOSITORY='$(imageRepository)'
+
+        fail() {
+          echo "ERROR: $*" >&2
+          exit 1
+        }
+
+        ACR_LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv --only-show-errors)
+        [[ -n "$ACR_LOGIN_SERVER" ]] || fail 'ACR login server was not resolved.'
+        IMAGE="$ACR_LOGIN_SERVER/$IMAGE_REPOSITORY:$TAG"
+
+        environment_hash() {
+          local revision="$1"
+          az containerapp revision show \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --revision "$revision" \
+            --query 'properties.template.containers[0].env' \
+            --output json \
+            --only-show-errors \
+          | jq -S '
+              (. // [])
+              | map({
+                  name: .name,
+                  value: (.value // null),
+                  secretRef: (.secretRef // null)
+                })
+              | sort_by(.name)
+            ' \
+          | sha256sum \
+          | cut -d' ' -f1
+        }
+
+        secret_metadata_json() {
+          az containerapp secret list \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --output json \
+            --only-show-errors \
+          | jq -S '
+              map({
+                name: .name,
+                keyVaultUrl: (.keyVaultUrl // null),
+                identity: (.identity // null)
+              })
+              | sort_by(.name)
+            '
+        }
+
+        secret_metadata_hash() {
+          secret_metadata_json \
+          | sha256sum \
+          | cut -d' ' -f1
+        }
+
+        wait_for_image() {
+          local expected_image="$1"
+          local forbidden_revision="$2"
+          local attempt json latest ready running health latest_image
+
+          for attempt in $(seq 1 60); do
+            json=$(az containerapp show -g "$RG" -n "$APP" -o json --only-show-errors)
+            latest=$(jq -r '.properties.latestRevisionName // ""' <<<"$json")
+            ready=$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$json")
+            running=$(jq -r '.properties.runningStatus // ""' <<<"$json")
+            health=''
+            latest_image=''
+
+            if [[ -n "$latest" ]]; then
+              latest_image=$(az containerapp revision show \
+                -g "$RG" \
+                -n "$APP" \
+                --revision "$latest" \
+                --query 'properties.template.containers[0].image' \
+                -o tsv \
+                --only-show-errors 2>/dev/null || true)
+
+              health=$(az containerapp revision show \
+                -g "$RG" \
+                -n "$APP" \
+                --revision "$latest" \
+                --query properties.healthState \
+                -o tsv \
+                --only-show-errors 2>/dev/null || true)
+            fi
+
+            # IMPORTANT: progress belongs on stderr because callers capture stdout
+            # to obtain only the revision name.
+            echo "Attempt $attempt/60 latest=$latest ready=$ready running=$running health=$health image=$latest_image" >&2
+
+            if [[ "$latest_image" == "$expected_image" \
+              && "$latest" == "$ready" \
+              && "$running" == 'Running' \
+              && "$health" == 'Healthy' \
+              && ( -z "$forbidden_revision" || "$latest" != "$forbidden_revision" ) ]]; then
+              printf '%s\n' "$latest"
+              return 0
+            fi
+
+            if [[ "$running" == 'Failed' || "$health" == 'Unhealthy' ]]; then
+              if [[ -n "$latest" ]]; then
+                az containerapp logs show \
+                  -g "$RG" \
+                  -n "$APP" \
+                  --revision "$latest" \
+                  --type console \
+                  --tail 200 \
+                  --format text \
+                  --only-show-errors >&2 || true
+              fi
+              return 1
+            fi
+
+            sleep 10
+          done
+
+          return 1
+        }
+
+        BEFORE=$(az containerapp show -g "$RG" -n "$APP" -o json --only-show-errors)
+        PREVIOUS_REVISION=$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$BEFORE")
+        PREVIOUS_IMAGE=$(jq -r '.properties.template.containers[0].image // ""' <<<"$BEFORE")
+
+        [[ -n "$PREVIOUS_REVISION" ]] || fail 'Previous ready Catalog revision was not resolved.'
+        [[ -n "$PREVIOUS_IMAGE" ]] || fail 'Previous Catalog image was not resolved.'
+        [[ "$PREVIOUS_IMAGE" != "$IMAGE" ]] || fail 'Target Catalog image is already deployed.'
+
+        ENV_HASH_BEFORE=$(environment_hash "$PREVIOUS_REVISION")
+        SECRET_HASH_BEFORE=$(secret_metadata_hash)
+        SECRET_META_BEFORE=$(secret_metadata_json)
+
+        DB_REF_BEFORE=$(jq -r '
+          [.properties.template.containers[0].env[]?
+           | select(.name == "SPRING_DATASOURCE_PASSWORD")][0].secretRef // ""
+        ' <<<"$BEFORE")
+
+        [[ -n "$DB_REF_BEFORE" ]] || fail 'Catalog datasource password is not secret-bound.'
+
+        DB_KV_BEFORE=$(jq -r --arg N "$DB_REF_BEFORE" '
+          [.[] | select(.name == $N)][0].keyVaultUrl // ""
+        ' <<<"$SECRET_META_BEFORE")
+
+        [[ "$DB_KV_BEFORE" == https://*.vault.azure.net/secrets/* ]] || \
+          fail 'Catalog datasource password is not Key Vault-backed. Deployment refused.'
+
+        echo "Current ready revision: $PREVIOUS_REVISION"
+        echo "Current image: $PREVIOUS_IMAGE"
+        echo "Runtime environment fingerprint: $ENV_HASH_BEFORE"
+        echo "Secret metadata fingerprint: $SECRET_HASH_BEFORE"
+        echo "Database secret binding: $DB_REF_BEFORE (Key Vault-backed)"
+        echo 'No secret values were read.'
+
+        rollback() {
+          local reason="$1"
+          echo "ROLLBACK: $reason" >&2
+          echo "Restoring image: $PREVIOUS_IMAGE" >&2
+
+          az containerapp update \
+            -g "$RG" \
+            -n "$APP" \
+            --image "$PREVIOUS_IMAGE" \
+            --no-wait \
+            --only-show-errors >/dev/null || {
+              echo 'ERROR: Catalog rollback update failed.' >&2
+              exit 1
+            }
+
+          local rollback_revision
+          rollback_revision=$(wait_for_image "$PREVIOUS_IMAGE" '') || {
+            echo 'ERROR: Catalog rollback revision did not become healthy.' >&2
+            exit 1
+          }
+
+          [[ "$(environment_hash "$rollback_revision")" == "$ENV_HASH_BEFORE" ]] || {
+            echo 'ERROR: Rollback environment fingerprint differs from the pre-deployment state.' >&2
+            exit 1
+          }
+
+          [[ "$(secret_metadata_hash)" == "$SECRET_HASH_BEFORE" ]] || {
+            echo 'ERROR: Rollback secret metadata fingerprint differs from the pre-deployment state.' >&2
+            exit 1
+          }
+
+          echo "Rollback completed: $rollback_revision" >&2
+          exit 1
+        }
+
+        echo 'Deploying Catalog image only; runtime environment and secrets are not being modified.'
+
+        az containerapp update \
+          -g "$RG" \
+          -n "$APP" \
+          --image "$IMAGE" \
+          --no-wait \
+          --only-show-errors >/dev/null || fail 'Catalog image update failed before a new revision was created.'
+
+        NEW_REVISION=$(wait_for_image "$IMAGE" "$PREVIOUS_REVISION") || \
+          rollback 'New Catalog revision did not become healthy.'
+
+        ENV_HASH_AFTER=$(environment_hash "$NEW_REVISION")
+        SECRET_HASH_AFTER=$(secret_metadata_hash)
+
+        [[ "$ENV_HASH_AFTER" == "$ENV_HASH_BEFORE" ]] || \
+          rollback 'Catalog runtime environment changed unexpectedly.'
+
+        [[ "$SECRET_HASH_AFTER" == "$SECRET_HASH_BEFORE" ]] || \
+          rollback 'Catalog secret metadata changed unexpectedly.'
+
+        AFTER=$(az containerapp show -g "$RG" -n "$APP" -o json --only-show-errors)
+        DB_REF_AFTER=$(jq -r '
+          [.properties.template.containers[0].env[]?
+           | select(.name == "SPRING_DATASOURCE_PASSWORD")][0].secretRef // ""
+        ' <<<"$AFTER")
+
+        SECRET_META_AFTER=$(secret_metadata_json)
+        DB_KV_AFTER=$(jq -r --arg N "$DB_REF_AFTER" '
+          [.[] | select(.name == $N)][0].keyVaultUrl // ""
+        ' <<<"$SECRET_META_AFTER")
+
+        [[ "$DB_REF_AFTER" == "$DB_REF_BEFORE" ]] || \
+          rollback 'Catalog datasource secret reference changed.'
+
+        [[ "$DB_KV_AFTER" == "$DB_KV_BEFORE" ]] || \
+          rollback 'Catalog datasource Key Vault reference changed.'
+
+        FQDN=$(jq -r '.properties.configuration.ingress.fqdn // ""' <<<"$AFTER")
+        [[ -n "$FQDN" ]] || rollback 'Catalog ingress FQDN is missing.'
+
+        for PATHNAME in \
+          '/actuator/health' \
+          '/actuator/health/liveness' \
+          '/actuator/health/readiness'
+        do
+          BODY=$(mktemp)
+          CODE=$(curl \
+            --silent \
+            --show-error \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --output "$BODY" \
+            --write-out '%{http_code}' \
+            "https://$FQDN$PATHNAME" || true)
+
+          echo "$PATHNAME -> HTTP ${CODE:-unavailable}"
+
+          if [[ "$CODE" != '200' ]] || ! jq -e '.status == "UP"' "$BODY" >/dev/null 2>&1; then
+            rm -f "$BODY"
+            rollback "$PATHNAME did not report UP."
+          fi
+
+          rm -f "$BODY"
+        done
+
+        echo '============================================================'
+        echo 'CATALOG DEPLOYMENT RESULT: PASS'
+        echo '============================================================'
+        echo "New revision: $NEW_REVISION"
+        echo "Image: $IMAGE"
+        echo 'Runtime environment preserved: YES'
+        echo 'Key Vault secret metadata preserved: YES'
+        echo 'Credential values read or changed: NO'
+        echo 'Redis resource provisioned: NO'
+        echo '/actuator/health: UP'
+        echo '/actuator/health/liveness: UP'
+        echo '/actuator/health/readiness: UP'
+        echo '============================================================'

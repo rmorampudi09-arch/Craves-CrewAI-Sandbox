@@ -1,0 +1,264 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmApimWrite
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: enableBorzoRoute
+    type: boolean
+    default: true
+  - name: enableShiprocketRoute
+    type: boolean
+    default: false
+  - name: enableDelhiveryRoute
+    type: boolean
+    default: false
+
+variables:
+  AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - bash: |
+      set -euo pipefail
+
+      validate_route() {
+        local enabled_raw="$1"
+        local provider="$2"
+        local route="$3"
+        local enabled="${enabled_raw,,}"
+        if [[ "$enabled" != 'true' ]]; then
+          echo "SKIP: $provider webhook route is disabled for this run."
+          return
+        fi
+
+        python3 - "$provider" "$route" <<'PY'
+      import pathlib
+      import re
+      import sys
+
+      provider = sys.argv[1]
+      route = sys.argv[2]
+      source_root = pathlib.Path("services/integration-service/src/main/java")
+
+      java_files = list(source_root.rglob("*.java"))
+      if not java_files:
+          print("ERROR: Integration Service Java source is unavailable.", file=sys.stderr)
+          raise SystemExit(2)
+
+      # Accept either a single full-route annotation/literal or a Spring MVC route
+      # composed in one controller from a class-level @RequestMapping and a
+      # method-level @PostMapping. The latter is how the neutral /p4 webhook is
+      # intentionally implemented.
+      for path in java_files:
+          text = path.read_text(encoding="utf-8")
+          if route in text:
+              print(f"PASS: {provider} backend route exists: {route} ({path})")
+              raise SystemExit(0)
+
+      base, leaf = route.rsplit("/", 1)
+      leaf = "/" + leaf
+
+      request_mapping = re.compile(
+          r'@RequestMapping\s*\(\s*(?:value\s*=\s*)?["\']'
+          + re.escape(base)
+          + r'["\']'
+      )
+      post_mapping = re.compile(
+          r'@PostMapping\s*\(\s*(?:value\s*=\s*)?["\']'
+          + re.escape(leaf)
+          + r'["\']'
+      )
+
+      for path in java_files:
+          text = path.read_text(encoding="utf-8")
+          if request_mapping.search(text) and post_mapping.search(text):
+              print(f"PASS: {provider} composed Spring backend route exists: {route} ({path})")
+              raise SystemExit(0)
+
+      print(
+          f"ERROR: {provider} webhook route {route} is not implemented in the Integration Service source. "
+          "Refusing to expose a dead APIM route.",
+          file=sys.stderr,
+      )
+      raise SystemExit(2)
+      PY
+      }
+
+      validate_route '${{ parameters.enableBorzoRoute }}' 'Borzo' '/api/v1/webhooks/delivery/borzo'
+      validate_route '${{ parameters.enableShiprocketRoute }}' 'Provider P4' '/api/v1/webhooks/delivery/p4'
+      validate_route '${{ parameters.enableDelhiveryRoute }}' 'Delhivery' '/api/v1/webhooks/delivery/delhivery'
+    displayName: Validate webhook backend routes before APIM exposure
+
+  - ${{ if eq(parameters.confirmApimWrite, true) }}:
+    - task: AzureCLI@2
+      displayName: Configure delivery-provider webhook APIM routes
+      inputs:
+        azureSubscription: $(AZURE_SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          set +x
+
+          RG='${{ parameters.resourceGroupName }}'
+          APIM='${{ parameters.apimName }}'
+          INTEGRATION_APP='${{ parameters.integrationContainerAppName }}'
+          API_VERSION='2022-08-01'
+          BORZO_RAW='${{ parameters.enableBorzoRoute }}'
+          SHIPROCKET_RAW='${{ parameters.enableShiprocketRoute }}'
+          DELHIVERY_RAW='${{ parameters.enableDelhiveryRoute }}'
+          BORZO="${BORZO_RAW,,}"
+          SHIPROCKET="${SHIPROCKET_RAW,,}"
+          DELHIVERY="${DELHIVERY_RAW,,}"
+
+          fail() {
+            echo "ERROR: $*" >&2
+            exit 2
+          }
+
+          for tool in az jq curl; do
+            command -v "$tool" >/dev/null || fail "$tool is required."
+          done
+
+          APP_JSON="$(az containerapp show -g "$RG" -n "$INTEGRATION_APP" -o json --only-show-errors)"
+          FQDN="$(jq -r '.properties.configuration.ingress.fqdn // ""' <<<"$APP_JSON")"
+          LATEST="$(jq -r '.properties.latestRevisionName // ""' <<<"$APP_JSON")"
+          READY="$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$APP_JSON")"
+          RUNNING="$(jq -r '.properties.runningStatus // ""' <<<"$APP_JSON")"
+
+          [[ -n "$FQDN" ]] || fail 'Integration Service ingress FQDN is unavailable.'
+          [[ "$LATEST" == "$READY" ]] || fail 'Integration Service latest revision is not the latest ready revision.'
+          [[ "$RUNNING" == 'Running' ]] || fail "Integration Service runningStatus is $RUNNING."
+
+          for path in /actuator/health/liveness /actuator/health/readiness; do
+            body="$(mktemp)"
+            code="$(curl --silent --show-error --connect-timeout 10 --max-time 30 --output "$body" --write-out '%{http_code}' "https://${FQDN}${path}" || true)"
+            if [[ "$code" != '200' ]] || ! jq -e '.status == "UP"' "$body" >/dev/null 2>&1; then
+              rm -f "$body"
+              fail "Integration Service ${path} is not UP (HTTP ${code:-curl-error})."
+            fi
+            rm -f "$body"
+          done
+
+          SUBSCRIPTION_ID="$(az account show --query id -o tsv --only-show-errors)"
+          BACKEND_ROOT="https://${FQDN}/api/v1/webhooks/delivery"
+          API_PATH='api/v1/webhooks/delivery'
+          API_ID=''
+
+          mapfile -t API_IDS < <(az apim api list -g "$RG" --service-name "$APIM" --query "[?path=='${API_PATH}'].name" -o tsv --only-show-errors)
+          (( ${#API_IDS[@]} <= 1 )) || fail "Multiple APIM APIs own path ${API_PATH}."
+
+          if (( ${#API_IDS[@]} == 0 )); then
+            API_ID='craves-delivery-webhooks-v1'
+            az apim api create \
+              -g "$RG" \
+              --service-name "$APIM" \
+              --api-id "$API_ID" \
+              --display-name 'Craves Delivery Provider Webhooks API' \
+              --path "$API_PATH" \
+              --service-url "$BACKEND_ROOT" \
+              --protocols https \
+              --subscription-required false \
+              -o none \
+              --only-show-errors
+          else
+            API_ID="${API_IDS[0]}"
+            SUB_REQUIRED="$(az apim api show -g "$RG" --service-name "$APIM" --api-id "$API_ID" --query subscriptionRequired -o tsv --only-show-errors)"
+            [[ "${SUB_REQUIRED,,}" == 'false' ]] || fail "Existing APIM API $API_ID requires a subscription key; refusing to weaken it automatically."
+
+            MGMT_API="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.ApiManagement/service/${APIM}/apis/${API_ID}"
+            PATCH_BODY="$(jq -n --arg serviceUrl "$BACKEND_ROOT" '{properties:{serviceUrl:$serviceUrl}}')"
+            az rest --method patch --url "${MGMT_API}?api-version=${API_VERSION}" --body "$PATCH_BODY" -o none
+          fi
+
+          API_MGMT="https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.ApiManagement/service/${APIM}/apis/${API_ID}"
+
+          ensure_operation() {
+            local enabled="$1"
+            local provider="$2"
+            local desired_id="$3"
+            local template="$4"
+
+            [[ "$enabled" == 'true' ]] || return 0
+
+            local existing_id
+            existing_id="$(az apim api operation list -g "$RG" --service-name "$APIM" --api-id "$API_ID" -o json --only-show-errors \
+              | jq -r --arg template "$template" '.[] | select((.method | ascii_upcase) == "POST" and .urlTemplate == $template) | .name' \
+              | head -1)"
+
+            local operation_id="$desired_id"
+            if [[ -n "$existing_id" ]]; then
+              operation_id="$existing_id"
+            else
+              if az apim api operation show -g "$RG" --service-name "$APIM" --api-id "$API_ID" --operation-id "$desired_id" -o json --only-show-errors >/tmp/craves-operation.json 2>/dev/null; then
+                existing_method="$(jq -r '.method // "" | ascii_upcase' /tmp/craves-operation.json)"
+                existing_template="$(jq -r '.urlTemplate // ""' /tmp/craves-operation.json)"
+                rm -f /tmp/craves-operation.json
+                [[ "$existing_method" == 'POST' && "$existing_template" == "$template" ]] || fail "Operation ID $desired_id already owns a different route."
+              else
+                az apim api operation create \
+                  -g "$RG" \
+                  --service-name "$APIM" \
+                  --api-id "$API_ID" \
+                  --operation-id "$desired_id" \
+                  --display-name "$provider signed delivery webhook" \
+                  --method POST \
+                  --url-template "$template" \
+                  -o none \
+                  --only-show-errors
+              fi
+            fi
+
+            local policy_xml policy_body saved_policy
+            policy_xml="<policies><inbound><base /></inbound><backend><base /></backend><outbound><base /><set-header name=\"Cache-Control\" exists-action=\"override\"><value>no-store</value></set-header><set-header name=\"X-Content-Type-Options\" exists-action=\"override\"><value>nosniff</value></set-header></outbound><on-error><base /></on-error></policies>"
+            policy_body="$(jq -n --arg value "$policy_xml" '{properties:{format:"rawxml",value:$value}}')"
+            az rest --method put \
+              --url "${API_MGMT}/operations/${operation_id}/policies/policy?api-version=${API_VERSION}" \
+              --body "$policy_body" \
+              -o none
+
+            saved_policy="$(az rest --method get --url "${API_MGMT}/operations/${operation_id}/policies/policy?api-version=${API_VERSION}" --query properties.value -o tsv)"
+            [[ "$saved_policy" != *'<set-body'* ]] || fail "$provider webhook policy must not transform the raw request body."
+            [[ "$saved_policy" == *'no-store'* ]] || fail "$provider webhook policy verification failed."
+            echo "PASS: POST ${API_PATH}${template} -> $provider"
+          }
+
+          ensure_operation "$BORZO" 'Borzo' 'delivery-webhook-borzo' '/borzo'
+          ensure_operation "$SHIPROCKET" 'Provider P4' 'delivery-webhook-provider-p4' '/p4'
+          ensure_operation "$DELHIVERY" 'Delhivery' 'delivery-webhook-delhivery' '/delhivery'
+
+          GATEWAY_URL="$(az apim show -g "$RG" -n "$APIM" --query gatewayUrl -o tsv --only-show-errors)"
+          [[ -n "$GATEWAY_URL" ]] || fail 'APIM gateway URL is unavailable.'
+
+          echo '============================================================'
+          echo 'DELIVERY PROVIDER WEBHOOK APIM RESULT: PASS'
+          echo "API ID: $API_ID"
+          echo "Backend: $BACKEND_ROOT"
+          [[ "$BORZO" == 'true' ]] && echo "Borzo callback: ${GATEWAY_URL}/${API_PATH}/borzo"
+          [[ "$SHIPROCKET" == 'true' ]] && echo "Provider P4 callback: ${GATEWAY_URL}/${API_PATH}/p4"
+          [[ "$DELHIVERY" == 'true' ]] && echo "Delhivery callback: ${GATEWAY_URL}/${API_PATH}/delhivery"
+          echo 'Raw webhook body transformation: DISABLED'
+          echo '============================================================'
+
+  - ${{ if ne(parameters.confirmApimWrite, true) }}:
+    - bash: |
+        echo 'ERROR: confirmApimWrite must be true for APIM changes.' >&2
+        exit 2
+      displayName: Block unconfirmed APIM write

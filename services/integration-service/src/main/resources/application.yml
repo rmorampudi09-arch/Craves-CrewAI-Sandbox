@@ -1,0 +1,168 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: craves-integration-service
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    default-schema: payment_schema
+    schemas: payment_schema
+    table: flyway_schema_history
+
+craves:
+  delivery-intelligence:
+    enabled: ${CRAVES_DELIVERY_INTELLIGENCE_ENABLED:false}
+    live-window-days: ${CRAVES_DELIVERY_LIVE_WINDOW_DAYS:7}
+    global-prior: ${CRAVES_DELIVERY_GLOBAL_PRIOR:100.0}
+    momentum-threshold: ${CRAVES_DELIVERY_MOMENTUM_THRESHOLD:3.0}
+    live-pull-k: ${CRAVES_DELIVERY_LIVE_PULL_K:10.0}
+    fade-factor: ${CRAVES_DELIVERY_DAILY_FADE_FACTOR:0.965}
+    max-stored-weight: ${CRAVES_DELIVERY_MAX_STORED_WEIGHT:400.0}
+    ml-weight: ${CRAVES_DELIVERY_ML_WEIGHT:0.55}
+    rolling-score-weight: ${CRAVES_DELIVERY_ROLLING_SCORE_WEIGHT:0.35}
+    exploration-weight: ${CRAVES_DELIVERY_EXPLORATION_WEIGHT:0.10}
+    proximity-weight: ${CRAVES_DELIVERY_PROXIMITY_WEIGHT:0.60}
+    quality-weight: ${CRAVES_DELIVERY_QUALITY_WEIGHT:0.40}
+    search-radius-km: ${CRAVES_DELIVERY_SEARCH_RADIUS_KM:5.0}
+    max-pickup-eta-minutes: ${CRAVES_DELIVERY_MAX_PICKUP_ETA_MINUTES:30.0}
+    unknown-proximity-score: ${CRAVES_DELIVERY_UNKNOWN_PROXIMITY_SCORE:50.0}
+    softmax-temperature: ${CRAVES_DELIVERY_SOFTMAX_TEMPERATURE:10.0}
+    success-threshold: ${CRAVES_DELIVERY_SUCCESS_THRESHOLD:70.0}
+    neutral-rating-score: ${CRAVES_DELIVERY_NEUTRAL_RATING_SCORE:70.0}
+    default-strategy: ${CRAVES_DELIVERY_ASSIGNMENT_STRATEGY:STOCHASTIC}
+    maintenance-cron: ${CRAVES_DELIVERY_MAINTENANCE_CRON:0 0 2 * * *}
+    maintenance-zone: ${CRAVES_DELIVERY_MAINTENANCE_ZONE:Asia/Kolkata}
+  delivery-command:
+    enabled: ${CRAVES_DELIVERY_COMMAND_ENABLED:false}
+    reconciliation-enabled: ${CRAVES_DELIVERY_RECONCILIATION_ENABLED:false}
+    webhook-processing-enabled: ${CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED:false}
+    tracking-reconciliation-enabled: ${CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED:false}
+    status-publisher-enabled: ${CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED:false}
+    fully-qualified-namespace: ${SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE:}
+    connection-string: ${SERVICE_BUS_CONNECTION_STRING:}
+    topic-name: ${SERVICE_BUS_TOPIC_NAME:craves-domain-events}
+    chef-accepted-subscription-name: ${SERVICE_BUS_CHEF_ACCEPTED_SUBSCRIPTION:integration-service-chef-accepted}
+    queue-name: ${SERVICE_BUS_DELIVERY_COMMAND_QUEUE:delivery-command}
+    lead-time-minutes: ${CRAVES_DELIVERY_COMMAND_LEAD_TIME_MINUTES:10}
+    quote-timeout-seconds: ${CRAVES_DELIVERY_QUOTE_TIMEOUT_SECONDS:4}
+    max-provider-attempts: ${CRAVES_DELIVERY_MAX_PROVIDER_ATTEMPTS:3}
+    max-delivery-attempts: ${CRAVES_DELIVERY_MAX_DELIVERY_ATTEMPTS:5}
+    retry:
+      base-seconds: ${CRAVES_DELIVERY_RETRY_BASE_SECONDS:30}
+      max-seconds: ${CRAVES_DELIVERY_RETRY_MAX_SECONDS:600}
+      claim-contention-seconds: ${CRAVES_DELIVERY_CLAIM_CONTENTION_SECONDS:10}
+    max-concurrent-messages: ${CRAVES_DELIVERY_MAX_CONCURRENT_MESSAGES:4}
+    prefetch-count: ${CRAVES_DELIVERY_PREFETCH_COUNT:8}
+    max-auto-lock-renew-minutes: ${CRAVES_DELIVERY_MAX_AUTO_LOCK_RENEW_MINUTES:5}
+    outbox-batch-size: ${CRAVES_DELIVERY_OUTBOX_BATCH_SIZE:20}
+    outbox-publish-interval-ms: ${CRAVES_DELIVERY_OUTBOX_PUBLISH_INTERVAL_MS:5000}
+    reconciliation-batch-size: ${CRAVES_DELIVERY_RECONCILIATION_BATCH_SIZE:20}
+    reconciliation-interval-ms: ${CRAVES_DELIVERY_RECONCILIATION_INTERVAL_MS:15000}
+    max-reconciliation-attempts: ${CRAVES_DELIVERY_MAX_RECONCILIATION_ATTEMPTS:20}
+    reconciliation-retry-base-seconds: ${CRAVES_DELIVERY_RECONCILIATION_RETRY_BASE_SECONDS:30}
+    reconciliation-stale-minutes: ${CRAVES_DELIVERY_RECONCILIATION_STALE_MINUTES:10}
+    webhook-batch-size: ${CRAVES_DELIVERY_WEBHOOK_BATCH_SIZE:20}
+    webhook-processing-interval-ms: ${CRAVES_DELIVERY_WEBHOOK_PROCESSING_INTERVAL_MS:2000}
+    max-webhook-attempts: ${CRAVES_DELIVERY_MAX_WEBHOOK_ATTEMPTS:10}
+    webhook-retry-base-seconds: ${CRAVES_DELIVERY_WEBHOOK_RETRY_BASE_SECONDS:5}
+    webhook-stale-minutes: ${CRAVES_DELIVERY_WEBHOOK_STALE_MINUTES:5}
+    tracking-batch-size: ${CRAVES_DELIVERY_TRACKING_BATCH_SIZE:20}
+    tracking-reconciliation-interval-ms: ${CRAVES_DELIVERY_TRACKING_RECONCILIATION_INTERVAL_MS:15000}
+    tracking-poll-seconds: ${CRAVES_DELIVERY_TRACKING_POLL_SECONDS:60}
+    max-tracking-attempts: ${CRAVES_DELIVERY_MAX_TRACKING_ATTEMPTS:20}
+    tracking-retry-base-seconds: ${CRAVES_DELIVERY_TRACKING_RETRY_BASE_SECONDS:30}
+    tracking-stale-minutes: ${CRAVES_DELIVERY_TRACKING_STALE_MINUTES:5}
+  refund:
+    consumer-enabled: ${CRAVES_REFUND_CONSUMER_ENABLED:false}
+    provider-execution-enabled: ${CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED:false}
+    reconciliation-enabled: ${CRAVES_REFUND_RECONCILIATION_ENABLED:false}
+    status-publisher-enabled: ${CRAVES_REFUND_STATUS_PUBLISHER_ENABLED:false}
+    production-provider-execution-approved: ${CRAVES_REFUND_PRODUCTION_PROVIDER_EXECUTION_APPROVED:false}
+    production-reconciliation-approved: ${CRAVES_REFUND_PRODUCTION_RECONCILIATION_APPROVED:false}
+    fully-qualified-namespace: ${SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE:}
+    connection-string: ${SERVICE_BUS_CONNECTION_STRING:}
+    topic-name: ${SERVICE_BUS_TOPIC_NAME:craves-domain-events}
+    subscription-name: ${SERVICE_BUS_REFUND_REQUESTED_SUBSCRIPTION:integration-service-refund-requested}
+    max-concurrent-messages: ${CRAVES_REFUND_MAX_CONCURRENT_MESSAGES:2}
+    prefetch-count: ${CRAVES_REFUND_PREFETCH_COUNT:4}
+    max-delivery-attempts: ${CRAVES_REFUND_MAX_DELIVERY_ATTEMPTS:5}
+    worker-batch-size: ${CRAVES_REFUND_WORKER_BATCH_SIZE:20}
+    worker-fixed-delay-ms: ${CRAVES_REFUND_WORKER_FIXED_DELAY_MS:30000}
+    max-provider-attempts: ${CRAVES_REFUND_MAX_PROVIDER_ATTEMPTS:8}
+    retry-base-delay-seconds: ${CRAVES_REFUND_RETRY_BASE_DELAY_SECONDS:60}
+    stale-lock-seconds: ${CRAVES_REFUND_STALE_LOCK_SECONDS:300}
+    status-outbox-batch-size: ${CRAVES_REFUND_STATUS_OUTBOX_BATCH_SIZE:20}
+    status-outbox-fixed-delay-ms: ${CRAVES_REFUND_STATUS_OUTBOX_FIXED_DELAY_MS:5000}
+  subscription-payments:
+    consumer-enabled: ${CRAVES_SUBSCRIPTION_PAYMENT_CONSUMER_ENABLED:false}
+    status-publisher-enabled: ${CRAVES_SUBSCRIPTION_PAYMENT_STATUS_PUBLISHER_ENABLED:false}
+    fully-qualified-namespace: ${SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE:}
+    connection-string: ${SERVICE_BUS_CONNECTION_STRING:}
+    topic-name: ${SERVICE_BUS_TOPIC_NAME:craves-domain-events}
+    request-subscription-name: ${SERVICE_BUS_SUBSCRIPTION_PAYMENT_REQUESTED_SUBSCRIPTION:integration-service-subscription-payment-requested}
+    subscription-service-base-url: ${CRAVES_SUBSCRIPTION_SERVICE_BASE_URL:}
+    max-concurrent-messages: ${CRAVES_SUBSCRIPTION_PAYMENT_MAX_CONCURRENT_MESSAGES:2}
+    prefetch-count: ${CRAVES_SUBSCRIPTION_PAYMENT_PREFETCH_COUNT:4}
+    max-delivery-attempts: ${CRAVES_SUBSCRIPTION_PAYMENT_MAX_DELIVERY_ATTEMPTS:5}
+    outbox-batch-size: ${CRAVES_SUBSCRIPTION_PAYMENT_OUTBOX_BATCH_SIZE:20}
+    max-publish-attempts: ${CRAVES_SUBSCRIPTION_PAYMENT_MAX_PUBLISH_ATTEMPTS:10}
+    stale-lock-minutes: ${CRAVES_SUBSCRIPTION_PAYMENT_STALE_LOCK_MINUTES:5}
+    outbox-fixed-delay-ms: ${CRAVES_SUBSCRIPTION_PAYMENT_OUTBOX_FIXED_DELAY_MS:5000}
+  cashfree:
+    webhook:
+      worker-enabled: ${CRAVES_CASHFREE_WEBHOOK_WORKER_ENABLED:false}
+      batch-size: ${CRAVES_CASHFREE_WEBHOOK_BATCH_SIZE:20}
+      fixed-delay-ms: ${CRAVES_CASHFREE_WEBHOOK_FIXED_DELAY_MS:2000}
+      max-attempts: ${CRAVES_CASHFREE_WEBHOOK_MAX_ATTEMPTS:10}
+      stale-minutes: ${CRAVES_CASHFREE_WEBHOOK_STALE_MINUTES:5}
+      retry-base-seconds: ${CRAVES_CASHFREE_WEBHOOK_RETRY_BASE_SECONDS:5}
+  providers:
+    borzo:
+      enabled: ${BORZO_API_ENABLED:false}
+      environment: ${BORZO_API_ENVIRONMENT:SANDBOX}
+      production-activation-approved: ${BORZO_PRODUCTION_ACTIVATION_APPROVED:false}
+      base-url: ${BORZO_API_BASE_URL:https://robotapitest-in.borzodelivery.com/api/business/1.8}
+      auth-token: ${BORZO_API_AUTH_TOKEN:}
+      callback-secret: ${BORZO_CALLBACK_TOKEN:}
+      callback-url: ${BORZO_CALLBACK_URL:}
+      connect-timeout-seconds: ${BORZO_CONNECT_TIMEOUT_SECONDS:5}
+      read-timeout-seconds: ${BORZO_READ_TIMEOUT_SECONDS:20}
+      reconciliation-page-size: ${BORZO_RECONCILIATION_PAGE_SIZE:50}
+      reconciliation-max-pages: ${BORZO_RECONCILIATION_MAX_PAGES:5}
+      reconciliation-lookback-seconds: ${BORZO_RECONCILIATION_LOOKBACK_SECONDS:120}
+    shiprocket:
+      enabled: ${SHIPROCKET_API_ENABLED:false}
+      create-enabled: ${SHIPROCKET_CREATE_ENABLED:false}
+      environment: ${SHIPROCKET_API_ENVIRONMENT:READ_ONLY}
+      production-activation-approved: ${SHIPROCKET_PRODUCTION_ACTIVATION_APPROVED:false}
+      attribution-approved: ${SHIPROCKET_ATTRIBUTION_APPROVED:false}
+      base-url: ${SHIPROCKET_API_BASE_URL:https://apiv2.shiprocket.in/v1/external}
+      email: ${SHIPROCKET_API_EMAIL:}
+      password: ${SHIPROCKET_API_PASSWORD:}
+      webhook-token: ${SHIPROCKET_WEBHOOK_TOKEN:}
+      order-email: ${SHIPROCKET_ORDER_EMAIL:}
+      package-length-cm: ${SHIPROCKET_PACKAGE_LENGTH_CM:}
+      package-breadth-cm: ${SHIPROCKET_PACKAGE_BREADTH_CM:}
+      package-height-cm: ${SHIPROCKET_PACKAGE_HEIGHT_CM:}
+      connect-timeout-seconds: ${SHIPROCKET_CONNECT_TIMEOUT_SECONDS:5}
+      read-timeout-seconds: ${SHIPROCKET_READ_TIMEOUT_SECONDS:20}
+      read-retry-attempts: ${SHIPROCKET_READ_RETRY_ATTEMPTS:3}
+      auth-refresh-skew-minutes: ${SHIPROCKET_AUTH_REFRESH_SKEW_MINUTES:60}
+      maximum-accepted-eta-minutes: ${SHIPROCKET_MAX_ACCEPTED_ETA_MINUTES:60}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        payments:
+          include: readinessState,db
+        token-revocation:
+          include: readinessState,redis

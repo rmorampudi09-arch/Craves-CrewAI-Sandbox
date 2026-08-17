@@ -1,0 +1,60 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: acrName
+    type: string
+    default: cravesprodlowacr82121
+  - name: containerAppName
+    type: string
+    default: ca-craves-web-prodlow
+  - name: imageTag
+    type: string
+    default: $(Build.BuildId)
+
+variables:
+  appPath: apps/customer-web
+  imageRepository: craves/customer-web
+  viteApiBaseUrl: https://api.craves.in/api/v1
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: AzureCLI@2
+    displayName: Build and push customer web image
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        ACR='${{ parameters.acrName }}'
+        TAG='${{ parameters.imageTag }}'
+        ACR_LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv)
+        IMAGE="$ACR_LOGIN_SERVER/$(imageRepository):$TAG"
+        az acr login --name "$ACR"
+        docker build --build-arg VITE_API_BASE_URL='$(viteApiBaseUrl)' -t "$IMAGE" "$(appPath)"
+        docker push "$IMAGE"
+        echo "Image pushed: $IMAGE"
+
+  - task: AzureCLI@2
+    displayName: Deploy customer web Container App
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        RG='${{ parameters.resourceGroupName }}'
+        ACR='${{ parameters.acrName }}'
+        APP='${{ parameters.containerAppName }}'
+        TAG='${{ parameters.imageTag }}'
+        ACR_LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv)
+        IMAGE="$ACR_LOGIN_SERVER/$(imageRepository):$TAG"
+        az containerapp update --name "$APP" --resource-group "$RG" --image "$IMAGE" --min-replicas 1 --max-replicas 1 -o table

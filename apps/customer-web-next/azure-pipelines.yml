@@ -1,0 +1,70 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: 24.x
+
+  - script: npm ci --no-audit --no-fund
+    displayName: Install locked dependencies
+
+  - script: npm run lint
+    displayName: Lint
+
+  - script: npm run typecheck
+    displayName: TypeScript
+
+  - script: npm run test
+    displayName: Contract tests
+
+  - script: npm run build
+    displayName: Production build
+    env:
+      CRAVES_API_BASE_URL: $(CRAVES_API_BASE_URL)
+      NEXT_PUBLIC_FIREBASE_API_KEY: $(NEXT_PUBLIC_FIREBASE_API_KEY)
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: $(NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: $(NEXT_PUBLIC_FIREBASE_PROJECT_ID)
+      NEXT_PUBLIC_FIREBASE_APP_ID: $(NEXT_PUBLIC_FIREBASE_APP_ID)
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: $(NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: $(NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)
+      NEXT_PUBLIC_RAZORPAY_MODE: $(NEXT_PUBLIC_RAZORPAY_MODE)
+
+  - task: CopyFiles@2
+    displayName: Stage standalone server
+    inputs:
+      SourceFolder: $(Build.SourcesDirectory)/.next/standalone
+      Contents: '**'
+      TargetFolder: $(Build.ArtifactStagingDirectory)/web
+
+  - task: CopyFiles@2
+    displayName: Stage Next static assets
+    inputs:
+      SourceFolder: $(Build.SourcesDirectory)/.next/static
+      Contents: '**'
+      TargetFolder: $(Build.ArtifactStagingDirectory)/web/.next/static
+
+  - task: CopyFiles@2
+    displayName: Stage public assets
+    inputs:
+      SourceFolder: $(Build.SourcesDirectory)/public
+      Contents: '**'
+      TargetFolder: $(Build.ArtifactStagingDirectory)/web/public
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish standalone web artifact
+    inputs:
+      targetPath: $(Build.ArtifactStagingDirectory)/web
+      artifact: craves-customer-web-standalone
+      publishLocation: pipeline

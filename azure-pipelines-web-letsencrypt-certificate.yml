@@ -1,0 +1,111 @@
+trigger: none
+pr: none
+
+schedules:
+  - cron: "0 3 * * 0"
+    displayName: Weekly customer web TLS certificate renewal check
+    branches:
+      include:
+        - main
+    always: true
+
+parameters:
+  - name: confirmProductionCertificateOperation
+    type: boolean
+    default: false
+  - name: forceIssue
+    type: boolean
+    default: false
+  - name: letsEncryptContactEmail
+    type: string
+    default: support@craves.in
+
+variables:
+  subscriptionId: 4f897b61-9b52-44b4-8cf1-bdac281cc1aa
+  resourceGroup: rg-craves-prodlow-centralindia
+  apexDnsZoneName: _acme-challenge.craves.in
+  wwwDnsZoneName: _acme-challenge.www.craves.in
+  parentDnsServer: ns51.domaincontrol.com
+  keyVaultName: kvcravesprodlowl3ing6
+  keyVaultCertificateName: craves-web-tls
+  containerAppEnvironmentName: cae-craves-prodlow-l3ing6
+  containerAppName: ca-craves-web-prodlow
+  apexHostname: craves.in
+  wwwHostname: www.craves.in
+  containerAppDefaultHostname: ca-craves-web-prodlow.happysand-aedc7165.centralindia.azurecontainerapps.io
+  containerAppCertificateApiVersion: 2024-02-02-preview
+  acmeShVersion: 3.1.4
+  renewBeforeDays: 30
+  dnsPropagationSeconds: 90
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    fetchDepth: 1
+
+  - bash: |
+      set -euo pipefail
+
+      packages=()
+      command -v dig >/dev/null 2>&1 || packages+=(dnsutils)
+      command -v shellcheck >/dev/null 2>&1 || packages+=(shellcheck)
+
+      if [[ ${#packages[@]} -gt 0 ]]; then
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends "${packages[@]}"
+      fi
+
+      bash -n infra/certificates/web-letsencrypt/renew-web-certificate.sh
+      bash -n infra/certificates/web-letsencrypt/run-web-certificate.sh
+      shellcheck infra/certificates/web-letsencrypt/renew-web-certificate.sh
+      shellcheck infra/certificates/web-letsencrypt/run-web-certificate.sh
+    displayName: Validate customer web certificate automation
+
+  - task: AzureCLI@2
+    displayName: Issue, recover or synchronize customer web certificate
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      addSpnToEnvironment: false
+      inlineScript: |
+        set -Eeuo pipefail
+        set +x
+
+        confirmation='${{ parameters.confirmProductionCertificateOperation }}'
+        force_issue='${{ parameters.forceIssue }}'
+        build_reason='$(Build.Reason)'
+
+        if [[ "${build_reason,,}" != 'schedule' && "${confirmation,,}" != 'true' ]]; then
+          echo 'ERROR: Manual runs require confirmProductionCertificateOperation=true.' >&2
+          exit 2
+        fi
+
+        if [[ "${build_reason,,}" == 'schedule' && "${force_issue,,}" == 'true' ]]; then
+          echo 'ERROR: Scheduled runs cannot force certificate issuance.' >&2
+          exit 2
+        fi
+
+        export SUBSCRIPTION_ID='$(subscriptionId)'
+        export RESOURCE_GROUP='$(resourceGroup)'
+        export APEX_DNS_ZONE_NAME='$(apexDnsZoneName)'
+        export WWW_DNS_ZONE_NAME='$(wwwDnsZoneName)'
+        export PARENT_DNS_SERVER='$(parentDnsServer)'
+        export KEY_VAULT_NAME='$(keyVaultName)'
+        export KEY_VAULT_CERTIFICATE_NAME='$(keyVaultCertificateName)'
+        export CONTAINER_APP_ENVIRONMENT_NAME='$(containerAppEnvironmentName)'
+        export CONTAINER_APP_NAME='$(containerAppName)'
+        export APEX_HOSTNAME='$(apexHostname)'
+        export WWW_HOSTNAME='$(wwwHostname)'
+        export CONTAINER_APP_DEFAULT_HOSTNAME='$(containerAppDefaultHostname)'
+        export CONTAINER_APP_CERTIFICATE_API_VERSION='$(containerAppCertificateApiVersion)'
+        export LETSENCRYPT_CONTACT_EMAIL='${{ parameters.letsEncryptContactEmail }}'
+        export ACME_SH_VERSION='$(acmeShVersion)'
+        export RENEW_BEFORE_DAYS='$(renewBeforeDays)'
+        export DNS_PROPAGATION_SECONDS='$(dnsPropagationSeconds)'
+        export FORCE_ISSUE="$force_issue"
+
+        bash infra/certificates/web-letsencrypt/run-web-certificate.sh

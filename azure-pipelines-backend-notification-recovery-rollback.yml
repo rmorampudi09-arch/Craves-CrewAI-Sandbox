@@ -1,0 +1,36 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmation
+    type: string
+    default: NOT_APPROVED
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: notificationContainerAppName
+    type: string
+    default: ca-craves-notification-service-p
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: AzureCLI@2
+    displayName: Disable notification recovery API
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        if [[ '${{ parameters.confirmation }}' != 'APPROVE_NOTIFICATION_RECOVERY_ROLLBACK' ]]; then
+          echo 'Explicit recovery rollback confirmation is required.' >&2
+          exit 1
+        fi
+        az containerapp update \
+          --resource-group '${{ parameters.resourceGroupName }}' \
+          --name '${{ parameters.notificationContainerAppName }}' \
+          --set-env-vars CRAVES_NOTIFICATION_RECOVERY_API_ENABLED=false \
+          --output none
+        echo 'Recovery API disabled. Notification requests, attempts, dead letters and recovery audit were preserved.'

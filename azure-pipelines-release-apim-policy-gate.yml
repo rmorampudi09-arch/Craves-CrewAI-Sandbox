@@ -1,0 +1,16 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    persistCredentials: false
+  - script: |
+      set -euo pipefail
+      sudo apt-get update -qq
+      sudo apt-get install -y --no-install-recommends libxml2-utils
+      chmod +x scripts/release/validate-apim-assets.sh
+      scripts/release/validate-apim-assets.sh .
+    displayName: Validate APIM XML policies and scripts

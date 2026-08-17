@@ -1,0 +1,87 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: acrName
+    type: string
+    default: cravesprodlowacr82121
+  - name: containerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: imageTag
+    type: string
+    default: $(Build.BuildId)
+
+variables:
+  AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection
+  modulePath: services/integration-service
+  imageRepository: craves/integration-service
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - script: |
+      set -euo pipefail
+      echo "Build ID: $(Build.BuildId)"
+      echo "Source commit: $(Build.SourceVersion)"
+      echo "Source branch: $(Build.SourceBranch)"
+    displayName: Show immutable build identity
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - script: |
+      set -euo pipefail
+      cd $(modulePath)
+      mvn -B -ntp clean verify
+    displayName: Maven build and tests
+
+  - task: AzureCLI@2
+    displayName: Build and push immutable Integration image
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        ACR='${{ parameters.acrName }}'
+        TAG='${{ parameters.imageTag }}'
+        ACR_LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv --only-show-errors)
+        [[ -n "$ACR_LOGIN_SERVER" ]] || { echo 'ERROR: ACR login server was not resolved.' >&2; exit 1; }
+        IMAGE="$ACR_LOGIN_SERVER/$(imageRepository):$TAG"
+        az acr login --name "$ACR" --only-show-errors
+        docker build --pull -t "$IMAGE" "$(modulePath)"
+        docker push "$IMAGE"
+        echo "Image pushed: $IMAGE"
+
+  - task: AzureCLI@2
+    displayName: Deploy Integration image without changing runtime configuration
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        RG='${{ parameters.resourceGroupName }}'
+        ACR='${{ parameters.acrName }}'
+        APP='${{ parameters.containerAppName }}'
+        TAG='${{ parameters.imageTag }}'
+        ACR_LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv --only-show-errors)
+        [[ -n "$ACR_LOGIN_SERVER" ]] || { echo 'ERROR: ACR login server was not resolved.' >&2; exit 1; }
+        IMAGE="$ACR_LOGIN_SERVER/$(imageRepository):$TAG"
+
+        bash scripts/release/deploy-single-service-preserve-runtime.sh \
+          "$RG" \
+          "$APP" \
+          "$IMAGE" \
+          integration

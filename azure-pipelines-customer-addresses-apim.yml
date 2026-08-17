@@ -1,0 +1,96 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmConfigureCustomerAddresses
+    displayName: Confirm customer-address APIM write
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    displayName: Azure resource group
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimServiceName
+    displayName: API Management service
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: userChefContainerAppName
+    displayName: User/Chef Service Container App
+    type: string
+    default: ca-craves-user-chef-service-prod
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    fetchDepth: 1
+
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-customer-addresses-apim.sh
+      python - <<'PY'
+      import xml.etree.ElementTree as ET
+      ET.parse("infra/apim/customer-addresses/customer-address-policy.xml")
+      print("Customer-address APIM script and policy are syntactically valid.")
+      PY
+    displayName: Validate customer-address APIM assets
+
+  - task: AzureCLI@2
+    displayName: Configure and verify customer-address APIM operations
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        set +x
+
+        CONFIRM='${{ parameters.confirmConfigureCustomerAddresses }}'
+        if [[ "${CONFIRM,,}" != 'true' ]]; then
+          echo 'ERROR: confirmConfigureCustomerAddresses must be true before changing APIM.' >&2
+          exit 1
+        fi
+
+        export RG='${{ parameters.resourceGroupName }}'
+        export APIM='${{ parameters.apimServiceName }}'
+        export USER_APP='${{ parameters.userChefContainerAppName }}'
+
+        bash scripts/apim/configure-customer-addresses-apim.sh
+
+        GATEWAY_URL=$(az apim show \
+          --resource-group "$RG" \
+          --name "$APIM" \
+          --query gatewayUrl \
+          --output tsv)
+        [[ "$GATEWAY_URL" == https://* ]] || {
+          echo 'ERROR: APIM gateway URL was not resolved.' >&2
+          exit 1
+        }
+
+        LIST_CODE=$(curl -sS --max-time 30 \
+          -o /tmp/customer-address-list.json \
+          -w '%{http_code}' \
+          "$GATEWAY_URL/api/v1/customer/addresses" || true)
+
+        CREATE_CODE=$(curl -sS --max-time 30 \
+          -H 'Content-Type: application/json' \
+          -d '{}' \
+          -o /tmp/customer-address-create.json \
+          -w '%{http_code}' \
+          "$GATEWAY_URL/api/v1/customer/addresses" || true)
+
+        echo "Unauthenticated address probes: GET=$LIST_CODE POST=$CREATE_CODE"
+        [[ "$LIST_CODE" == '401' ]] || {
+          echo "ERROR: Address list route expected HTTP 401 without a token, received $LIST_CODE." >&2
+          cat /tmp/customer-address-list.json >&2 || true
+          exit 1
+        }
+        [[ "$CREATE_CODE" == '401' ]] || {
+          echo "ERROR: Address create route expected HTTP 401 without a token, received $CREATE_CODE." >&2
+          cat /tmp/customer-address-create.json >&2 || true
+          exit 1
+        }
+
+        echo 'SUCCESS: Customer address GET/POST routes exist in APIM and enforce Bearer authentication.'

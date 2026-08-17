@@ -1,0 +1,60 @@
+name: Admin dashboard CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - apps/customer-web-next/**
+      - services/order-service/**
+      - .github/workflows/admin-dashboard-ci.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/customer-web-next/**
+      - services/order-service/**
+      - .github/workflows/admin-dashboard-ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: admin-dashboard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Next.js admin checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/customer-web-next
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/customer-web-next/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+        env:
+          CRAVES_API_BASE_URL: https://example.invalid/api/v1
+          NEXT_PUBLIC_CASHFREE_MODE: sandbox
+
+  backend:
+    name: Order-service admin authorization
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/order-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - run: mvn -B -ntp -Dtest=AdminDashboardControllerTest test

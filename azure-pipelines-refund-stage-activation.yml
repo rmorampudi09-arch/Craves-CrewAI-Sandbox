@@ -1,0 +1,110 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: targetStage
+    type: string
+    default: stage1_request_publication
+    values:
+      - stage1_request_publication
+      - stage2_timeout_worker
+      - stage3_cashfree_sandbox_execution
+      - stage4_reconciliation
+      - stage5_customer_notifications
+  - name: confirmFinancialSandboxExecution
+    type: boolean
+    default: false
+  - name: expectedRefundRequestOutboxCount
+    type: number
+    default: 0
+  - name: expectedExecutableRefundCount
+    type: number
+    default: 0
+  - name: expectedNotificationBacklogCount
+    type: number
+    default: 0
+  - name: cashfreeApiVersion
+    type: string
+    default: '2025-01-01'
+  - name: cashfreeSandboxSimulationStatus
+    type: string
+    default: PENDING
+    values:
+      - PENDING
+      - SUCCESS
+      - FAILED
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: notificationContainerAppName
+    type: string
+    default: ca-craves-notification-service-p
+  - name: serviceBusNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+  - name: serviceBusTopic
+    type: string
+    default: craves-domain-events
+  - name: integrationRefundSubscription
+    type: string
+    default: integration-service-refund-requested
+  - name: integrationRefundRule
+    type: string
+    default: refund-requested-only
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: AzureCLI@2
+    displayName: Verify service health and Service Bus RBAC
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        bash scripts/refund/verify-refund-rollout-dependencies.sh
+    env:
+      RESOURCE_GROUP: ${{ parameters.resourceGroupName }}
+      ORDER_APP: ${{ parameters.orderContainerAppName }}
+      INTEGRATION_APP: ${{ parameters.integrationContainerAppName }}
+      NOTIFICATION_APP: ${{ parameters.notificationContainerAppName }}
+      SERVICE_BUS_NAMESPACE: ${{ parameters.serviceBusNamespace }}
+      SERVICE_BUS_TOPIC: ${{ parameters.serviceBusTopic }}
+
+  - task: AzureCLI@2
+    displayName: Activate ${{ parameters.targetStage }} with safety gates
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        bash scripts/refund/activate-refund-stage.sh
+    env:
+      TARGET_STAGE: ${{ parameters.targetStage }}
+      CONFIRM_FINANCIAL_SANDBOX_EXECUTION: ${{ parameters.confirmFinancialSandboxExecution }}
+      EXPECTED_REFUND_REQUEST_OUTBOX_COUNT: ${{ parameters.expectedRefundRequestOutboxCount }}
+      EXPECTED_EXECUTABLE_REFUND_COUNT: ${{ parameters.expectedExecutableRefundCount }}
+      EXPECTED_NOTIFICATION_BACKLOG_COUNT: ${{ parameters.expectedNotificationBacklogCount }}
+      CASHFREE_API_VERSION: ${{ parameters.cashfreeApiVersion }}
+      CASHFREE_SANDBOX_SIMULATION_STATUS: ${{ parameters.cashfreeSandboxSimulationStatus }}
+      RESOURCE_GROUP: ${{ parameters.resourceGroupName }}
+      ORDER_APP: ${{ parameters.orderContainerAppName }}
+      INTEGRATION_APP: ${{ parameters.integrationContainerAppName }}
+      NOTIFICATION_APP: ${{ parameters.notificationContainerAppName }}
+      SERVICE_BUS_NAMESPACE: ${{ parameters.serviceBusNamespace }}
+      SERVICE_BUS_TOPIC: ${{ parameters.serviceBusTopic }}
+      INTEGRATION_REFUND_SUBSCRIPTION: ${{ parameters.integrationRefundSubscription }}
+      INTEGRATION_REFUND_RULE: ${{ parameters.integrationRefundRule }}
+      CASHFREE_SANDBOX_CLIENT_ID: $(CASHFREE_SANDBOX_CLIENT_ID)
+      CASHFREE_SANDBOX_CLIENT_SECRET: $(CASHFREE_SANDBOX_CLIENT_SECRET)

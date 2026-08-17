@@ -1,0 +1,37 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Verify admin notification recovery web
+  - script: |
+      set -euo pipefail
+      LIST_ROUTE='apps/customer-web-next/src/app/api/admin/notifications/recovery/route.ts'
+      RETRY_ROUTE='apps/customer-web-next/src/app/api/admin/notifications/recovery/[requestId]/route.ts'
+      CONTRACT='apps/customer-web-next/src/lib/admin-notification-recovery-contract.ts'
+      COMPONENT='apps/customer-web-next/src/components/admin-notification-recovery.tsx'
+      grep -q 'isSameOrigin' "$RETRY_ROUTE"
+      grep -q 'confirmation !== "RETRY"' "$COMPONENT"
+      grep -q 'Recipient identity and provider payloads are intentionally omitted' "$COMPONENT"
+      grep -q 'Cache-Control.*no-store' "$LIST_ROUTE"
+      grep -q 'Cache-Control.*no-store' "$RETRY_ROUTE"
+      if grep -REn '(localStorage|sessionStorage|console\.(log|debug)|recipientIdentityId|requestKey)' "$LIST_ROUTE" "$RETRY_ROUTE" "$COMPONENT"; then
+        echo 'ERROR: Notification recovery runtime exposes forbidden storage, logging or recipient identifiers.' >&2
+        exit 1
+      fi
+      echo 'Admin notification recovery safety gates passed.'
+    displayName: Verify privacy and requeue boundaries

@@ -1,0 +1,169 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Craves Customer Delivery Status API",
+    "version": "1.0.0",
+    "description": "Authenticated customer read model for the provider-neutral delivery lifecycle of one chef-specific order."
+  },
+  "servers": [
+    {
+      "url": "https://api.craves.in"
+    }
+  ],
+  "paths": {
+    "/api/v1/orders/{orderId}/delivery-status": {
+      "get": {
+        "operationId": "getOrderDeliveryStatus",
+        "summary": "Get delivery status for an owned chef-specific order",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Owned order with its current provider-neutral delivery projection. Delivery fields can be null before the first delivery status is accepted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Delivery state must not be cached by shared or browser caches.",
+                "schema": {
+                  "type": "string",
+                  "example": "no-store, no-cache, must-revalidate"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Authenticated identity does not have the customer role"
+          },
+          "404": {
+            "description": "The authenticated customer does not own an order with this identifier"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "DeliveryStatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "orderId",
+          "history"
+        ],
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deliveryJobId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "providerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "PENDING",
+              "SEARCHING",
+              "COURIER_ASSIGNED",
+              "COURIER_TO_PICKUP",
+              "AT_PICKUP",
+              "PICKED_UP",
+              "IN_TRANSIT",
+              "AT_DROPOFF",
+              "DELIVERED",
+              "CANCELLED",
+              "DELAYED",
+              "RETURNING",
+              "RETURNED",
+              "FAILED"
+            ]
+          },
+          "trackingUrl": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "history": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/DeliveryStatusHistoryResponse"
+            }
+          }
+        }
+      },
+      "DeliveryStatusHistoryResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "newStatus",
+          "observedAt",
+          "recordedAt"
+        ],
+        "properties": {
+          "oldStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "newStatus": {
+            "type": "string"
+          },
+          "trackingUrl": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

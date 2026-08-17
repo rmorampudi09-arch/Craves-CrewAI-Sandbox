@@ -1,0 +1,39 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmation
+    type: string
+    default: NOT_APPROVED
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: notificationContainerAppName
+    type: string
+    default: ca-craves-notification-service-p
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: AzureCLI@2
+    displayName: Enable notification recovery API only
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        if [[ '${{ parameters.confirmation }}' != 'APPROVE_NOTIFICATION_RECOVERY_API' ]]; then
+          echo 'Explicit notification recovery confirmation is required.' >&2
+          exit 1
+        fi
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.notificationContainerAppName }}'
+        az containerapp show --resource-group "$RG" --name "$APP" --output none
+        az containerapp update --resource-group "$RG" --name "$APP" \
+          --set-env-vars CRAVES_NOTIFICATION_RECOVERY_API_ENABLED=true --output none
+        az containerapp show --resource-group "$RG" --name "$APP" \
+          --query "{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,running:properties.runningStatus,recoveryApi:properties.template.containers[0].env[?name=='CRAVES_NOTIFICATION_RECOVERY_API_ENABLED']|[0].value,deliveryWorker:properties.template.containers[0].env[?name=='CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED']|[0].value}" \
+          --output json
+        echo 'Recovery API enabled. This pipeline did not enable or invoke any delivery provider.'

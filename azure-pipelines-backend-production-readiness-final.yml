@@ -1,0 +1,212 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: SourceIntegrity
+    displayName: Source and safety integrity
+    jobs:
+      - job: VerifyPack
+        timeoutInMinutes: 25
+        steps:
+          - checkout: self
+            fetchDepth: 0
+          - script: |
+              set -euo pipefail
+
+              syntax_failures=0
+              syntax_checked=0
+              while IFS= read -r script; do
+                syntax_checked=$((syntax_checked+1))
+                if ! bash -n "$script"; then
+                  echo "SHELL_SYNTAX_ERROR $script" >&2
+                  syntax_failures=$((syntax_failures+1))
+                fi
+              done < <(find scripts -type f -name '*.sh' -print | sort)
+
+              if (( syntax_failures > 0 )); then
+                echo "ERROR: $syntax_failures shell script(s) failed Bash syntax validation; all failures are listed above." >&2
+                exit 1
+              fi
+              echo "SUCCESS: $syntax_checked shell scripts passed Bash syntax validation."
+
+              jq -e . config/production/backend-production-readiness.json >/dev/null
+              jq -e . config/production/azure-resource-inventory.json >/dev/null
+              jq -e . config/production/container-app-secret-names.json >/dev/null
+              bash scripts/release/verify-backend-production-readiness-pack.sh
+              bash scripts/release/verify-azure-resource-inventory-references.sh
+              bash scripts/release/verify-container-app-secret-names.sh
+              bash scripts/release/verify-seven-service-deployment-contracts.sh
+              bash scripts/release/verify-deployment-environment-bindings.sh
+              bash scripts/release/generate-backend-production-run-plan.sh "$(Build.ArtifactStagingDirectory)/backend-production-run-plan.md"
+
+              python3 - <<'PY'
+              from pathlib import Path
+              import xml.etree.ElementTree as ET
+              policies = sorted(Path('infra/apim').glob('**/*.xml'))
+              if not policies:
+                  raise SystemExit('No APIM XML policies were found')
+              for policy in policies:
+                  ET.parse(policy)
+                  print(f'XML_OK {policy}')
+              PY
+            displayName: Verify shell syntax, manifests, inventory, environment bindings, deployments and APIM XML
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/backend-production-run-plan.md
+              artifact: backend-production-run-plan
+            displayName: Publish immutable run plan
+
+  - stage: JavaVerification
+    displayName: Seven-service Java verification
+    dependsOn: SourceIntegrity
+    jobs:
+      - job: BuildServices
+        timeoutInMinutes: 90
+        steps:
+          - checkout: self
+          - task: JavaToolInstaller@0
+            inputs:
+              versionSpec: '21'
+              jdkArchitectureOption: x64
+              jdkSourceOption: PreInstalled
+            displayName: Use Java 21
+          - script: |
+              set -uo pipefail
+              SERVICES=(auth-service user-chef-service catalog-service order-service subscription-service integration-service notification-service)
+              FAILED_SERVICES=()
+
+              print_surefire_failures() {
+                local service="$1"
+                local report_dir="services/$service/target/surefire-reports"
+                [[ -d "$report_dir" ]] || return 0
+
+                python3 - "$report_dir" <<'PY'
+              import sys
+              import xml.etree.ElementTree as ET
+              from pathlib import Path
+
+              report_dir = Path(sys.argv[1])
+              failures_found = False
+
+              for report in sorted(report_dir.glob("TEST-*.xml")):
+                  try:
+                      root = ET.parse(report).getroot()
+                  except ET.ParseError as error:
+                      print(f"SUREFIRE_REPORT_PARSE_ERROR {report}: {error}")
+                      continue
+
+                  for case in root.iter("testcase"):
+                      failure = case.find("failure")
+                      error = case.find("error")
+                      problem = failure if failure is not None else error
+                      if problem is None:
+                          continue
+
+                      failures_found = True
+                      class_name = case.attrib.get("classname", "unknown-class")
+                      method_name = case.attrib.get("name", "unknown-test")
+                      message = " ".join((problem.attrib.get("message") or "").split())
+                      print(f"FAILING_TEST {class_name}#{method_name}")
+                      print(f"  report: {report}")
+                      if message:
+                          print(f"  message: {message[:1000]}")
+
+                      detail_lines = (problem.text or "").strip().splitlines()
+                      for detail_line in detail_lines[:12]:
+                          print(f"  {detail_line[:500]}")
+
+              if not failures_found:
+                  print(f"SUREFIRE_FAILURE_DETAILS_UNAVAILABLE {report_dir}")
+              PY
+              }
+
+              for SERVICE in "${SERVICES[@]}"; do
+                echo "========== $SERVICE =========="
+                if (cd "services/$SERVICE" && mvn -B -ntp clean verify); then
+                  echo "MAVEN_OK $SERVICE"
+                else
+                  echo "MAVEN_FAILED $SERVICE" >&2
+                  print_surefire_failures "$SERVICE"
+                  FAILED_SERVICES+=("$SERVICE")
+                fi
+              done
+
+              if (( ${#FAILED_SERVICES[@]} > 0 )); then
+                echo "ERROR: ${#FAILED_SERVICES[@]} service build(s) failed:" >&2
+                printf '  - %s\n' "${FAILED_SERVICES[@]}" >&2
+                exit 1
+              fi
+
+              echo "SUCCESS: All ${#SERVICES[@]} Spring services passed Maven clean verify."
+            displayName: Build all Spring services and print every test failure
+          - task: PublishTestResults@2
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: 'services/**/target/surefire-reports/TEST-*.xml'
+              failTaskOnFailedTests: true
+              failTaskOnMissingResultsFile: false
+              testRunTitle: Craves seven-service Java verification
+            displayName: Publish Java test reports
+
+  - stage: AdminWebVerification
+    displayName: Administrator web verification
+    dependsOn: SourceIntegrity
+    jobs:
+      - job: BuildAdminWeb
+        timeoutInMinutes: 40
+        steps:
+          - checkout: self
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '24.x'
+            displayName: Use Node.js 24
+          - script: |
+              set -euo pipefail
+              cd apps/customer-web-next
+              npm install --ignore-scripts --no-audit --no-fund
+
+              set +e
+              FAILED_CHECKS=()
+              npm run typecheck
+              TYPECHECK_EXIT=$?
+              (( TYPECHECK_EXIT == 0 )) || FAILED_CHECKS+=("typecheck")
+
+              npm run test
+              TEST_EXIT=$?
+              (( TEST_EXIT == 0 )) || FAILED_CHECKS+=("test")
+
+              npm run build
+              BUILD_EXIT=$?
+              (( BUILD_EXIT == 0 )) || FAILED_CHECKS+=("build")
+              set -e
+
+              if (( ${#FAILED_CHECKS[@]} > 0 )); then
+                echo "ERROR: ${#FAILED_CHECKS[@]} administrator web check(s) failed:" >&2
+                printf '  - %s\n' "${FAILED_CHECKS[@]}" >&2
+                exit 1
+              fi
+
+              echo 'SUCCESS: Administrator web typecheck, tests and production build passed.'
+            displayName: Run all administrator web checks and report every failure
+
+  - stage: FinalGate
+    displayName: Final non-deploying gate
+    dependsOn:
+      - SourceIntegrity
+      - JavaVerification
+      - AdminWebVerification
+    condition: succeeded()
+    jobs:
+      - job: ConfirmNoDeployment
+        steps:
+          - checkout: self
+          - script: |
+              set -euo pipefail
+              echo 'SUCCESS: Source, seven-service Java and administrator web readiness gates passed.'
+              echo 'No image was pushed, no service was deployed, no migration was executed, no APIM write occurred and no provider was called.'
+              echo 'Proceed only with the reviewed merge and production execution runbook.'
+            displayName: Record preflight completion

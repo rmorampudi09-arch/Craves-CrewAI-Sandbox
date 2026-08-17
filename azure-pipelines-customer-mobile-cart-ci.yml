@@ -1,0 +1,31 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/mobile/customer-app
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test mobile cart
+  - script: |
+      set -euo pipefail
+      grep -q 'Authorization' apps/mobile/customer-app/src/cart/cart-api.ts
+      grep -q 'validateCart' apps/mobile/customer-app/src/screens/CartScreen.tsx
+      if grep -REn '(platformFee|taxAmount|deliveryFee).*[-+*/]' apps/mobile/customer-app/src/cart apps/mobile/customer-app/src/screens/CartScreen.tsx; then
+        echo 'ERROR: Mobile cart appears to calculate checkout fees.' >&2
+        exit 1
+      fi
+      if grep -REn '(customerIdentityId|providerPayload|AsyncStorage|console\.(log|debug))' apps/mobile/customer-app/src/cart apps/mobile/customer-app/src/screens/CartScreen.tsx --exclude='*.test.ts'; then
+        echo 'ERROR: Mobile cart runtime references private data, insecure storage or logging.' >&2
+        exit 1
+      fi
+      echo 'Mobile cart pricing and privacy controls passed.'
+    displayName: Verify mobile cart safety

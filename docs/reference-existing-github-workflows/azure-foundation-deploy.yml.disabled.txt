@@ -1,0 +1,127 @@
+name: Azure Foundation - Validate, What-If, Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Choose validate, what-if, or deploy. Use deploy only after validate and what-if are clean."
+        required: true
+        default: "validate"
+        type: choice
+        options:
+          - validate
+          - what-if
+          - deploy
+      azure_location:
+        description: "Azure region. Use centralindia for current fallback deployment."
+        required: true
+        default: "centralindia"
+        type: choice
+        options:
+          - centralindia
+          - southindia
+      resource_group:
+        description: "Azure resource group name."
+        required: true
+        default: "rg-craves-prodlow-centralindia"
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: craves-azure-foundation-${{ github.event.inputs.resource_group }}
+  cancel-in-progress: false
+
+env:
+  PROJECT: craves
+  ENV_NAME: prodlow
+  ACR_NAME: cravesprodlowacr82121
+  TEMPLATE_FILE: infra/main.bicep
+
+jobs:
+  foundation:
+    name: Azure foundation ${{ github.event.inputs.action }}
+    runs-on: ubuntu-latest
+    environment: prodlow
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login through OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Confirm Azure account
+        run: |
+          az account show --query "{name:name, subscriptionId:id, tenantId:tenantId}" -o table
+
+      - name: Install Bicep CLI
+        run: |
+          az bicep install
+          az bicep version
+
+      - name: Create resource group if missing
+        run: |
+          az group create \
+            --name "${{ github.event.inputs.resource_group }}" \
+            --location "${{ github.event.inputs.azure_location }}"
+
+      - name: Check PostgreSQL Flexible Server SKU availability
+        run: |
+          echo "Checking PostgreSQL Flexible Server SKUs in ${{ github.event.inputs.azure_location }}"
+          az postgres flexible-server list-skus \
+            --location "${{ github.event.inputs.azure_location }}" \
+            -o table | head -40
+
+      - name: Validate Bicep deployment
+        if: ${{ github.event.inputs.action == 'validate' || github.event.inputs.action == 'what-if' || github.event.inputs.action == 'deploy' }}
+        run: |
+          az deployment group validate \
+            --resource-group "${{ github.event.inputs.resource_group }}" \
+            --template-file "$TEMPLATE_FILE" \
+            --parameters location="${{ github.event.inputs.azure_location }}" \
+                         environmentName="$ENV_NAME" \
+                         projectName="$PROJECT" \
+                         acrName="$ACR_NAME" \
+                         postgresAdminPassword='${{ secrets.POSTGRES_ADMIN_PASSWORD }}'
+
+      - name: What-if deployment preview
+        if: ${{ github.event.inputs.action == 'what-if' || github.event.inputs.action == 'deploy' }}
+        run: |
+          az deployment group what-if \
+            --resource-group "${{ github.event.inputs.resource_group }}" \
+            --template-file "$TEMPLATE_FILE" \
+            --parameters location="${{ github.event.inputs.azure_location }}" \
+                         environmentName="$ENV_NAME" \
+                         projectName="$PROJECT" \
+                         acrName="$ACR_NAME" \
+                         postgresAdminPassword='${{ secrets.POSTGRES_ADMIN_PASSWORD }}'
+
+      - name: Deploy foundation
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        run: |
+          az deployment group create \
+            --name craves-foundation-001 \
+            --resource-group "${{ github.event.inputs.resource_group }}" \
+            --template-file "$TEMPLATE_FILE" \
+            --parameters location="${{ github.event.inputs.azure_location }}" \
+                         environmentName="$ENV_NAME" \
+                         projectName="$PROJECT" \
+                         acrName="$ACR_NAME" \
+                         postgresAdminPassword='${{ secrets.POSTGRES_ADMIN_PASSWORD }}' \
+            --query "properties.outputs" \
+            -o json
+
+      - name: List deployed resources
+        if: ${{ github.event.inputs.action == 'deploy' }}
+        run: |
+          az resource list \
+            --resource-group "${{ github.event.inputs.resource_group }}" \
+            --query "[].{Name:name, Type:type, Location:location}" \
+            -o table

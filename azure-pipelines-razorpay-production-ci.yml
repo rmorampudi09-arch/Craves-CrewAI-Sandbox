@@ -1,0 +1,49 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+  - task: JavaToolInstaller@0
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+  - bash: |
+      set -euo pipefail
+      cd services/integration-service
+      mvn -B -ntp clean verify
+    displayName: Verify Razorpay backend, subscriptions, webhooks and refunds
+  - bash: |
+      set -euo pipefail
+      cd services/order-service
+      mvn -B -ntp clean verify
+    displayName: Verify provider-neutral refund status consumption
+  - task: NodeTool@0
+    inputs:
+      versionSpec: 24.x
+  - bash: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm ci --no-audit --no-fund
+      npm run lint
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Verify Razorpay customer checkout
+  - bash: |
+      set -euo pipefail
+      test -f azure-pipelines-razorpay-environment.yml
+      test -f azure-pipelines-razorpay-production-rollback.yml
+      test -f azure-pipelines-razorpay-webhook-apim.yml
+      grep -Fq 'PAYMENT_PROVIDER_NAME=RAZORPAY' azure-pipelines-razorpay-environment.yml
+      grep -Fq 'CASHFREE_API_ENABLED=false' azure-pipelines-razorpay-environment.yml
+      grep -Fq 'X-Razorpay-Signature' infra/apim/customer-payments/razorpay-webhook-policy.xml
+      ! grep -Fq 'validate-jwt' infra/apim/customer-payments/razorpay-webhook-policy.xml
+      grep -Fq 'checkout.razorpay.com/v1/checkout.js' apps/customer-web-next/src/components/checkout/RazorpayPayment.tsx
+      grep -Fq 'checkout.razorpay.com/v1/checkout.js' apps/customer-web-next/src/components/subscription-razorpay-payment.tsx
+      ! rg -n 'sdk.cashfree.com' apps/customer-web-next/src/components/checkout apps/customer-web-next/src/components/subscription-razorpay-payment.tsx
+    displayName: Verify provider switch is Razorpay-only and fail-closed

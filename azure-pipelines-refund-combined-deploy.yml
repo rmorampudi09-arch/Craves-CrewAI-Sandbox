@@ -1,0 +1,259 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: acrName
+    type: string
+    default: cravesprodlowacr82121
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: notificationContainerAppName
+    type: string
+    default: ca-craves-notification-service-p
+  - name: imageTag
+    type: string
+    default: $(Build.BuildId)
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - script: |
+      set -euo pipefail
+      for service in order-service integration-service notification-service; do
+        echo "Building $service"
+        (cd "services/$service" && mvn -B clean verify)
+      done
+    displayName: Build and test refund services
+
+  - script: |
+      set -euo pipefail
+      for schema in contracts/events/*.schema.json; do
+        python3 -m json.tool "$schema" >/dev/null
+      done
+    displayName: Validate domain-event contracts
+
+  - task: AzureCLI@2
+    displayName: Verify current safety state
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        RG='${{ parameters.resourceGroupName }}'
+        ORDER_APP='${{ parameters.orderContainerAppName }}'
+        INTEGRATION_APP='${{ parameters.integrationContainerAppName }}'
+        NOTIFICATION_APP='${{ parameters.notificationContainerAppName }}'
+
+        read_env() {
+          local app="$1"
+          local name="$2"
+          az containerapp show \
+            --resource-group "$RG" \
+            --name "$app" \
+            --query "properties.template.containers[0].env[?name=='$name'].value | [0]" \
+            --output tsv
+        }
+
+        require_true() {
+          local label="$1"
+          local value="$2"
+          if [[ "${value,,}" != "true" ]]; then
+            echo "ERROR: $label must be true before combined deployment. Current value: ${value:-<empty>}"
+            exit 1
+          fi
+        }
+
+        require_false_or_empty() {
+          local label="$1"
+          local value="$2"
+          if [[ -n "$value" && "${value,,}" != "false" ]]; then
+            echo "ERROR: $label must be false before combined deployment. Current value: $value"
+            exit 1
+          fi
+        }
+
+        az containerapp show --resource-group "$RG" --name "$ORDER_APP" --output none
+        az containerapp show --resource-group "$RG" --name "$INTEGRATION_APP" --output none
+        az containerapp show --resource-group "$RG" --name "$NOTIFICATION_APP" --output none
+
+        require_true "Order refund-status consumer" "$(read_env "$ORDER_APP" CRAVES_REFUND_STATUS_CONSUMER_ENABLED)"
+        require_true "Order domain-event outbox" "$(read_env "$ORDER_APP" CRAVES_DOMAIN_EVENT_OUTBOX_ENABLED)"
+        require_true "Order Service Bus publisher" "$(read_env "$ORDER_APP" CRAVES_DOMAIN_EVENT_SERVICE_BUS_ENABLED)"
+        require_false_or_empty "Order chef timeout worker" "$(read_env "$ORDER_APP" CRAVES_CHEF_ACCEPTANCE_WORKER_ENABLED)"
+        require_false_or_empty "Order notification dispatcher" "$(read_env "$ORDER_APP" CRAVES_NOTIFICATION_OUTBOX_DISPATCHER_ENABLED)"
+
+        ORDER_TYPES=$(read_env "$ORDER_APP" CRAVES_DOMAIN_EVENT_ENABLED_TYPES)
+        if [[ "$ORDER_TYPES" != "CHEF_ACCEPTED_ORDER" ]]; then
+          echo "ERROR: Order event allow-list must still be CHEF_ACCEPTED_ORDER before combined deployment."
+          echo "Current value: ${ORDER_TYPES:-<empty>}"
+          exit 1
+        fi
+
+        require_true "Integration refund consumer" "$(read_env "$INTEGRATION_APP" CRAVES_REFUND_CONSUMER_ENABLED)"
+        require_true "Integration refund-status publisher" "$(read_env "$INTEGRATION_APP" CRAVES_REFUND_STATUS_PUBLISHER_ENABLED)"
+        require_false_or_empty "Cashfree provider execution" "$(read_env "$INTEGRATION_APP" CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED)"
+        require_false_or_empty "Cashfree reconciliation" "$(read_env "$INTEGRATION_APP" CRAVES_REFUND_RECONCILIATION_ENABLED)"
+        require_false_or_empty "Delivery command execution" "$(read_env "$INTEGRATION_APP" CRAVES_DELIVERY_COMMAND_ENABLED)"
+        require_false_or_empty "Borzo execution" "$(read_env "$INTEGRATION_APP" BORZO_API_ENABLED)"
+
+        echo "SUCCESS: Current runtime state is safe for combined deployment."
+
+  - task: AzureCLI@2
+    displayName: Build and push all refund-service images
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        ACR='${{ parameters.acrName }}'
+        TAG='${{ parameters.imageTag }}'
+        LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer --output tsv)
+
+        az acr login --name "$ACR"
+
+        build_push() {
+          local service="$1"
+          local repository="$2"
+          local image="$LOGIN_SERVER/$repository:$TAG"
+          docker build -t "$image" "services/$service"
+          docker push "$image"
+          echo "Pushed $image"
+        }
+
+        build_push order-service craves/order-service
+        build_push integration-service craves/integration-service
+        build_push notification-service craves/notification-service
+
+  - task: AzureCLI@2
+    displayName: Deploy all services with safe switches
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        RG='${{ parameters.resourceGroupName }}'
+        ACR='${{ parameters.acrName }}'
+        TAG='${{ parameters.imageTag }}'
+        ORDER_APP='${{ parameters.orderContainerAppName }}'
+        INTEGRATION_APP='${{ parameters.integrationContainerAppName }}'
+        NOTIFICATION_APP='${{ parameters.notificationContainerAppName }}'
+        LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer --output tsv)
+
+        declare -A PREVIOUS_REVISIONS
+        for app in "$NOTIFICATION_APP" "$INTEGRATION_APP" "$ORDER_APP"; do
+          PREVIOUS_REVISIONS[$app]=$(az containerapp show \
+            --resource-group "$RG" \
+            --name "$app" \
+            --query properties.latestRevisionName \
+            --output tsv)
+        done
+
+        az containerapp update \
+          --resource-group "$RG" \
+          --name "$NOTIFICATION_APP" \
+          --image "$LOGIN_SERVER/craves/notification-service:$TAG" \
+          --output none
+
+        az containerapp update \
+          --resource-group "$RG" \
+          --name "$INTEGRATION_APP" \
+          --image "$LOGIN_SERVER/craves/integration-service:$TAG" \
+          --set-env-vars \
+            CRAVES_REFUND_CONSUMER_ENABLED=true \
+            CRAVES_REFUND_STATUS_PUBLISHER_ENABLED=true \
+            CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED=false \
+            CRAVES_REFUND_RECONCILIATION_ENABLED=false \
+            CRAVES_DELIVERY_COMMAND_ENABLED=false \
+            BORZO_API_ENABLED=false \
+          --output none
+
+        az containerapp update \
+          --resource-group "$RG" \
+          --name "$ORDER_APP" \
+          --image "$LOGIN_SERVER/craves/order-service:$TAG" \
+          --set-env-vars \
+            CRAVES_REFUND_STATUS_CONSUMER_ENABLED=true \
+            CRAVES_DOMAIN_EVENT_OUTBOX_ENABLED=true \
+            CRAVES_DOMAIN_EVENT_SERVICE_BUS_ENABLED=true \
+            CRAVES_DOMAIN_EVENT_ENABLED_TYPES=CHEF_ACCEPTED_ORDER \
+            CRAVES_CHEF_ACCEPTANCE_WORKER_ENABLED=false \
+            CRAVES_NOTIFICATION_OUTBOX_DISPATCHER_ENABLED=false \
+          --output none
+
+        wait_healthy() {
+          local app="$1"
+          local previous="$2"
+          local expected_image="$3"
+
+          for attempt in $(seq 1 60); do
+            local latest ready health running image
+            latest=$(az containerapp show --resource-group "$RG" --name "$app" --query properties.latestRevisionName --output tsv)
+            ready=$(az containerapp show --resource-group "$RG" --name "$app" --query properties.latestReadyRevisionName --output tsv)
+            running=$(az containerapp show --resource-group "$RG" --name "$app" --query properties.runningStatus --output tsv)
+            health=$(az containerapp revision show --resource-group "$RG" --name "$app" --revision "$latest" --query properties.healthState --output tsv 2>/dev/null || true)
+            image=$(az containerapp revision show --resource-group "$RG" --name "$app" --revision "$latest" --query properties.template.containers[0].image --output tsv 2>/dev/null || true)
+
+            echo "$app attempt $attempt/60: latest=$latest ready=$ready health=$health running=$running image=$image"
+
+            if [[ "$latest" != "$previous" \
+                  && "$latest" == "$ready" \
+                  && "$health" == "Healthy" \
+                  && "$running" == "Running" \
+                  && "$image" == "$expected_image" ]]; then
+              return 0
+            fi
+
+            if [[ "$health" == "Unhealthy" || "$running" == "Failed" ]]; then
+              az containerapp logs show \
+                --resource-group "$RG" \
+                --name "$app" \
+                --revision "$latest" \
+                --type console \
+                --tail 100 \
+                --format text || true
+              return 1
+            fi
+
+            sleep 10
+          done
+
+          echo "ERROR: $app did not become healthy."
+          return 1
+        }
+
+        wait_healthy "$NOTIFICATION_APP" "${PREVIOUS_REVISIONS[$NOTIFICATION_APP]}" "$LOGIN_SERVER/craves/notification-service:$TAG"
+        wait_healthy "$INTEGRATION_APP" "${PREVIOUS_REVISIONS[$INTEGRATION_APP]}" "$LOGIN_SERVER/craves/integration-service:$TAG"
+        wait_healthy "$ORDER_APP" "${PREVIOUS_REVISIONS[$ORDER_APP]}" "$LOGIN_SERVER/craves/order-service:$TAG"
+
+        echo "============================================================"
+        echo "SUCCESS: REFUND SERVICES DEPLOYED TOGETHER"
+        echo "Order, Integration and Notification revisions are healthy."
+        echo "REFUND_REQUESTED publication remains disabled."
+        echo "Chef timeout worker remains disabled."
+        echo "Cashfree execution remains disabled."
+        echo "Reconciliation remains disabled."
+        echo "Customer notification dispatch remains disabled."
+        echo "============================================================"

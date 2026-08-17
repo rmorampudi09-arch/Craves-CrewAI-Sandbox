@@ -1,0 +1,1003 @@
+.page {
+  --landing-red: #f62e18;
+  --landing-red-hover: #df2412;
+  --landing-ink: #111111;
+  --landing-muted: #5f6064;
+  --landing-soft: #fff5f3;
+  --landing-line: #eadfdd;
+  background: #ffffff;
+  color: var(--landing-ink);
+}
+
+.primaryCta {
+  border: 1px solid transparent !important;
+  border-radius: 9999px !important;
+  background: var(--landing-red) !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.primaryCta:not(:disabled):hover,
+.primaryCta:not(:disabled):focus-visible {
+  border-color: transparent !important;
+  background: var(--landing-red-hover) !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.secondaryCta {
+  border: 1px solid var(--landing-line) !important;
+  border-radius: 9999px !important;
+  background: #ffffff !important;
+  color: var(--landing-ink) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.secondaryCta:not(:disabled):hover,
+.secondaryCta:not(:disabled):focus-visible {
+  border-color: var(--landing-red) !important;
+  background: #ffffff !important;
+  color: var(--landing-red) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.textButton {
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--landing-ink) !important;
+  box-shadow: none !important;
+}
+
+.textButton:not(:disabled):hover,
+.textButton:not(:disabled):focus-visible {
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--landing-red) !important;
+  box-shadow: none !important;
+}
+
+.storeButton {
+  border: 1px solid #111111 !important;
+  border-radius: 0.75rem !important;
+  background: #111111 !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.storeButton:disabled {
+  cursor: default !important;
+  opacity: 1 !important;
+}
+
+.sticker {
+  border: 1px solid var(--landing-line);
+  background: #ffffff;
+  box-shadow: 0 5px 12px rgba(0, 0, 0, 0.08);
+}
+
+.darkCard {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #1a1a1a;
+}
+
+.footerLink {
+  color: #c7c9cc;
+  transition: color 120ms ease;
+}
+
+.footerLink:hover,
+.footerLink:focus-visible {
+  color: #ffffff;
+}
+
+.referenceCrop {
+  position: relative;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.referenceCropImage {
+  position: absolute;
+  display: block;
+  max-width: none !important;
+  user-select: none;
+  pointer-events: none;
+}
+
+.referenceSemanticHero {
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.referenceHeader {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1px solid rgba(234, 223, 221, 0.75);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(18px);
+}
+
+.referenceHeaderInner {
+  display: flex;
+  min-height: 5.8rem;
+  max-width: 92rem;
+  margin: 0 auto;
+  align-items: center;
+  gap: 1.4rem;
+  padding: 0.75rem 2rem;
+}
+
+.referenceBrand {
+  display: inline-flex;
+  min-width: max-content;
+  align-items: center;
+  gap: 0.9rem;
+  color: var(--landing-ink);
+  text-decoration: none;
+}
+
+.referenceBrandTagline {
+  position: relative;
+  padding-bottom: 0.3rem;
+  font-family: "Dancing Script", cursive;
+  font-size: clamp(1.05rem, 1.45vw, 1.5rem);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.referenceBrandTagline::after,
+.referenceEyebrow span {
+  content: "";
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  bottom: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--landing-red);
+  transform: rotate(-2deg);
+}
+
+.referenceNav {
+  display: flex;
+  margin-left: auto;
+  align-items: center;
+  gap: clamp(1rem, 2vw, 2.25rem);
+}
+
+.referenceNavLink,
+.referenceNavButton {
+  border: 0;
+  background: transparent;
+  color: var(--landing-ink);
+  font-size: 0.94rem;
+  font-weight: 750;
+  text-decoration: none;
+  transition: color 150ms ease;
+}
+
+.referenceNavLink:hover,
+.referenceNavLink:focus-visible,
+.referenceNavButton:hover,
+.referenceNavButton:focus-visible {
+  color: var(--landing-red);
+}
+
+.referenceGetAppButton {
+  display: inline-flex;
+  min-height: 3.2rem;
+  align-items: center;
+  gap: 0.8rem;
+  border-radius: 999px;
+  background: var(--landing-red);
+  padding: 0.75rem 1.35rem;
+  color: #ffffff;
+  font-size: 0.92rem;
+  font-weight: 800;
+  text-decoration: none;
+  transition: background 150ms ease, transform 150ms ease;
+}
+
+.referenceGetAppButton:hover,
+.referenceGetAppButton:focus-visible,
+.referencePrimaryButton:hover,
+.referencePrimaryButton:focus-visible {
+  background: var(--landing-red-hover);
+  transform: translateY(-1px);
+}
+
+.referenceGetAppDivider {
+  width: 1px;
+  height: 1.3rem;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.referenceMenuButton {
+  display: none;
+  margin-left: auto;
+  height: 2.8rem;
+  width: 2.8rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--landing-line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--landing-ink);
+}
+
+.referenceMobileNav {
+  display: none;
+}
+
+.referenceHeroInner {
+  display: grid;
+  max-width: 92rem;
+  margin: 0 auto;
+  grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+  align-items: center;
+  gap: clamp(1rem, 2vw, 2rem);
+  padding: clamp(3rem, 5.2vw, 5.8rem) 2rem 2.5rem;
+}
+
+.referenceHeroCopy {
+  position: relative;
+  z-index: 2;
+  max-width: 36rem;
+}
+
+.referenceHeroPill {
+  display: inline-flex;
+  min-height: 2.8rem;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid #f3d8d4;
+  border-radius: 999px;
+  padding: 0.55rem 1rem;
+  color: var(--landing-red);
+  font-size: 0.92rem;
+  font-weight: 800;
+}
+
+.referenceHeroPill span {
+  color: var(--landing-ink);
+}
+
+.referenceHeroTitle,
+.referenceSectionTitle,
+.referenceChefsTitle,
+.referenceAppTitle {
+  margin: 0;
+  font-family: "Playfair Display", Georgia, serif;
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  color: #050505;
+}
+
+.referenceHeroTitle {
+  margin-top: 1.65rem;
+  max-width: 11ch;
+  font-size: clamp(3.7rem, 6.1vw, 6.5rem);
+  line-height: 0.92;
+}
+
+.referenceHeroTitle span,
+.referenceSectionTitle span,
+.referenceChefsTitle span,
+.referenceAppTitle span,
+.referenceImpactCallout strong span {
+  color: var(--landing-red);
+}
+
+.referenceHeroTitle span,
+.referenceSectionTitle span,
+.referenceAppTitle span {
+  position: relative;
+  display: inline-block;
+}
+
+.referenceHeroTitle span::after,
+.referenceSectionTitle span::after,
+.referenceAppTitle span::after {
+  content: "";
+  position: absolute;
+  left: 2%;
+  right: 0;
+  bottom: -0.06em;
+  height: 0.055em;
+  min-height: 3px;
+  border-radius: 999px;
+  background: var(--landing-red);
+  transform: rotate(-1.5deg);
+}
+
+.referenceHeroBody {
+  max-width: 31rem;
+  margin-top: 2rem;
+  color: #2d2d2f;
+  font-size: clamp(1rem, 1.3vw, 1.18rem);
+  line-height: 1.6;
+}
+
+.referenceHeroActions {
+  display: flex;
+  margin-top: 2rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+
+.referencePrimaryButton {
+  display: inline-flex;
+  min-height: 3.55rem;
+  align-items: center;
+  justify-content: center;
+  gap: 1.1rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--landing-red);
+  padding: 0.85rem 1.8rem;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 800;
+  text-decoration: none;
+  transition: background 150ms ease, transform 150ms ease;
+}
+
+.referenceWatchButton {
+  display: inline-flex;
+  min-height: 3.55rem;
+  align-items: center;
+  gap: 0.8rem;
+  color: var(--landing-ink);
+  font-size: 0.95rem;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.referencePlayCircle {
+  display: inline-flex;
+  height: 3.3rem;
+  width: 3.3rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #f3d8d4;
+  border-radius: 999px;
+  color: var(--landing-red);
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.referenceWatchButton:hover .referencePlayCircle,
+.referenceWatchButton:focus-visible .referencePlayCircle {
+  border-color: var(--landing-red);
+  background: var(--landing-soft);
+}
+
+.referenceLocationButton {
+  display: inline-flex;
+  max-width: 100%;
+  margin-top: 1.4rem;
+  align-items: center;
+  gap: 0.55rem;
+  border: 0;
+  background: transparent;
+  padding: 0.25rem 0;
+  color: #68686b;
+  font-size: 0.86rem;
+  font-weight: 650;
+  text-align: left;
+}
+
+.referenceLocationButton svg {
+  flex: 0 0 auto;
+  color: var(--landing-red);
+}
+
+.referenceHeroArtworkWrap {
+  min-width: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
+
+.referenceHeroArtwork {
+  width: 100%;
+  min-height: 26rem;
+  border-radius: 1.5rem;
+}
+
+.referenceFeatureGrid {
+  display: grid;
+  max-width: 92rem;
+  margin: 0 auto;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  padding: 0 2rem 3rem;
+}
+
+.referenceFeatureCard {
+  display: grid;
+  min-height: 10.4rem;
+  grid-template-columns: auto 1fr;
+  gap: 1rem;
+  border: 1px solid #eee4e2;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.98);
+  padding: 1.35rem 1.3rem;
+  box-shadow: 0 14px 38px rgba(45, 16, 10, 0.055);
+}
+
+.referenceFeatureIcon,
+.referenceStepIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #fff0ed;
+  color: var(--landing-red);
+}
+
+.referenceFeatureIcon {
+  height: 4.2rem;
+  width: 4.2rem;
+}
+
+.referenceFeatureCard h2 {
+  max-width: 10rem;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.referenceMiniRule {
+  display: block;
+  width: 5.2rem;
+  margin: 0.7rem 0;
+  border-top: 1.5px dashed #ff8b7e;
+}
+
+.referenceFeatureCard p {
+  margin: 0;
+  color: #353538;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.referenceSemanticSection {
+  background: #ffffff;
+  padding: clamp(4.5rem, 7vw, 7.5rem) 2rem;
+}
+
+.referenceSectionInner {
+  max-width: 88rem;
+  margin: 0 auto;
+}
+
+.referenceCenteredHeading {
+  max-width: 70rem;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.referenceEyebrow {
+  position: relative;
+  display: inline-block;
+  margin: 0 0 1.25rem;
+  padding-bottom: 0.55rem;
+  color: var(--landing-red);
+  font-size: 0.92rem;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+}
+
+.referenceSectionTitle {
+  font-size: clamp(3rem, 5vw, 5.3rem);
+  line-height: 1.02;
+}
+
+.referenceCenteredHeading > p:last-child {
+  margin: 1.35rem auto 0;
+  color: #37373a;
+  font-size: clamp(1rem, 1.25vw, 1.2rem);
+  line-height: 1.55;
+}
+
+.referenceHowGrid,
+.referenceWhyGrid {
+  display: grid;
+  margin-top: 2.8rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+}
+
+.referenceHowCard,
+.referenceWhyCard {
+  position: relative;
+  min-width: 0;
+  text-align: center;
+}
+
+.referenceHowCard {
+  padding: 0 1.15rem;
+}
+
+.referenceStepNumber {
+  display: inline-flex;
+  height: 4.2rem;
+  width: 4.2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #fff0ed;
+  color: var(--landing-red);
+  font-size: 1.25rem;
+  font-weight: 900;
+}
+
+.referenceHowArtwork {
+  width: 100%;
+  margin: 0.55rem auto 0.8rem;
+}
+
+.referenceHowCard .referenceStepIcon,
+.referenceWhyCard .referenceStepIcon {
+  width: 3.6rem;
+  height: 3.6rem;
+  margin: 0 auto 0.65rem;
+  border: 1px solid #f6d9d5;
+  background: #fff8f6;
+}
+
+.referenceHowCard h3,
+.referenceWhyCard h3 {
+  margin: 0;
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: clamp(1.35rem, 1.65vw, 1.65rem);
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.referenceHowCard p,
+.referenceWhyCard p {
+  max-width: 15.5rem;
+  margin: 0.65rem auto 0;
+  color: #303033;
+  font-size: 0.96rem;
+  line-height: 1.55;
+}
+
+.referenceStepArrow {
+  position: absolute;
+  top: 11.5rem;
+  right: -0.6rem;
+  z-index: 2;
+  color: var(--landing-red);
+  font-family: Georgia, serif;
+  font-size: 2.7rem;
+  font-weight: 400;
+  transform: translateX(50%);
+}
+
+.referenceLoveCallout,
+.referenceImpactCallout {
+  display: flex;
+  max-width: 78rem;
+  margin: 3.2rem auto 0;
+  align-items: center;
+  gap: 1.4rem;
+  border-radius: 1.2rem;
+  background: #fff8f6;
+  padding: 1.3rem 2rem;
+  color: var(--landing-red);
+}
+
+.referenceLoveCallout {
+  border: 1.5px dashed #ff9f94;
+}
+
+.referenceLoveCallout strong,
+.referenceImpactCallout strong {
+  display: block;
+  color: var(--landing-ink);
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: clamp(1.15rem, 1.7vw, 1.5rem);
+  line-height: 1.35;
+}
+
+.referenceLoveCallout span,
+.referenceImpactCallout p {
+  display: block;
+  margin: 0.3rem 0 0;
+  color: #464649;
+  font-size: 0.92rem;
+}
+
+.referenceWhyCard {
+  padding: 0 1.45rem 0.5rem;
+  border-right: 1px solid #f1e7e5;
+}
+
+.referenceWhyCard:last-child {
+  border-right: 0;
+}
+
+.referenceWhyArtwork {
+  width: 100%;
+  margin: 0 auto 0.4rem;
+}
+
+.referenceHeartRule {
+  display: block;
+  margin: 0.45rem auto 0.55rem;
+  color: var(--landing-red);
+  font-size: 0.85rem;
+  letter-spacing: 0.3em;
+}
+
+.referenceImpactCallout {
+  border: 0;
+}
+
+.referenceChefsIntro {
+  display: grid;
+  grid-template-columns: minmax(0, 0.75fr) minmax(15rem, 0.35fr);
+  align-items: start;
+  gap: 2.5rem;
+}
+
+.referenceChefsTitle {
+  font-size: clamp(3rem, 4.7vw, 5.1rem);
+  line-height: 1.02;
+}
+
+.referenceChefsIntro > div:first-child > p:last-of-type,
+.referenceAppCopy > p:last-of-type {
+  max-width: 31rem;
+  margin: 1.35rem 0 0;
+  color: #39393c;
+  font-size: 1.02rem;
+  line-height: 1.55;
+}
+
+.referenceChefButton {
+  margin-top: 1.5rem;
+}
+
+.referenceChefNote {
+  justify-self: center;
+  display: flex;
+  width: min(100%, 18rem);
+  min-height: 13rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+  border: 1px solid #f4d8b3;
+  background: #fff7e7;
+  padding: 1.4rem;
+  color: var(--landing-red);
+  transform: rotate(4deg);
+  box-shadow: 0 12px 30px rgba(84, 52, 16, 0.08);
+}
+
+.referenceChefNote span {
+  color: #252527;
+  font-family: "Dancing Script", cursive;
+  font-size: 1.55rem;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.referenceChefPanorama {
+  width: 100%;
+  margin-top: 1.8rem;
+}
+
+.referenceKitchenLine {
+  display: flex;
+  margin: 0.85rem auto 0;
+  align-items: center;
+  justify-content: center;
+  gap: 0.8rem;
+  color: #37373a;
+  font-size: 0.95rem;
+  text-align: center;
+}
+
+.referenceKitchenLine span {
+  color: var(--landing-red);
+}
+
+.referenceAppGrid {
+  display: grid;
+  margin-top: clamp(3rem, 5vw, 5rem);
+  grid-template-columns: minmax(0, 0.74fr) minmax(0, 1.26fr);
+  align-items: center;
+  gap: clamp(1.5rem, 4vw, 4rem);
+}
+
+.referenceAppTitle {
+  font-size: clamp(3rem, 4.3vw, 4.7rem);
+  line-height: 1.04;
+}
+
+.referenceStoreBadges {
+  display: flex;
+  margin-top: 1.6rem;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+.referenceStoreBadge {
+  display: inline-flex;
+  min-width: 10.8rem;
+  flex-direction: column;
+  justify-content: center;
+  border-radius: 0.55rem;
+  background: #080808;
+  padding: 0.55rem 1rem;
+  color: #ffffff;
+  line-height: 1.05;
+}
+
+.referenceStoreBadge small {
+  font-size: 0.58rem;
+  letter-spacing: 0.03em;
+}
+
+.referenceStoreBadge strong {
+  margin-top: 0.18rem;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.referenceAppArtwork {
+  width: 100%;
+  align-self: end;
+}
+
+.referenceNavLink:focus-visible,
+.referenceNavButton:focus-visible,
+.referenceGetAppButton:focus-visible,
+.referenceMenuButton:focus-visible,
+.referencePrimaryButton:focus-visible,
+.referenceWatchButton:focus-visible,
+.referenceLocationButton:focus-visible {
+  outline: 3px solid rgba(246, 46, 24, 0.32);
+  outline-offset: 3px;
+}
+
+@media (max-width: 1180px) {
+  .referenceHeaderInner {
+    gap: 1rem;
+    padding-inline: 1.4rem;
+  }
+
+  .referenceNav {
+    gap: 1rem;
+  }
+
+  .referenceBrandTagline {
+    display: none;
+  }
+
+  .referenceHeroInner,
+  .referenceFeatureGrid,
+  .referenceSemanticSection {
+    padding-left: 1.4rem;
+    padding-right: 1.4rem;
+  }
+}
+
+@media (max-width: 1023px) {
+  .referenceHeaderInner {
+    min-height: 4.9rem;
+  }
+
+  .referenceNav,
+  .referenceGetAppButton {
+    display: none;
+  }
+
+  .referenceBrandTagline,
+  .referenceMenuButton {
+    display: inline-flex;
+  }
+
+  .referenceMobileNav {
+    display: grid;
+    gap: 0.2rem;
+    border-top: 1px solid var(--landing-line);
+    background: #ffffff;
+    padding: 0.8rem 1.2rem 1rem;
+  }
+
+  .referenceMobileNav a,
+  .referenceMobileNav button {
+    border: 0;
+    border-radius: 0.8rem;
+    background: transparent;
+    padding: 0.85rem 0.9rem;
+    color: var(--landing-ink);
+    font-size: 0.95rem;
+    font-weight: 750;
+    text-align: left;
+    text-decoration: none;
+  }
+
+  .referenceMobileNav a:hover,
+  .referenceMobileNav button:hover {
+    background: var(--landing-soft);
+    color: var(--landing-red);
+  }
+
+  .referenceHeroInner {
+    grid-template-columns: 1fr;
+    gap: 2.2rem;
+    padding-top: 3.2rem;
+  }
+
+  .referenceHeroCopy {
+    max-width: 43rem;
+  }
+
+  .referenceHeroArtworkWrap {
+    max-width: 58rem;
+    margin: 0 auto;
+  }
+
+  .referenceHeroArtwork {
+    min-height: 0;
+  }
+
+  .referenceFeatureGrid,
+  .referenceHowGrid,
+  .referenceWhyGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  .referenceStepArrow {
+    display: none;
+  }
+
+  .referenceWhyCard {
+    border: 1px solid #f1e7e5;
+    border-radius: 1rem;
+    padding: 1rem;
+  }
+
+  .referenceChefsIntro,
+  .referenceAppGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .referenceChefNote {
+    justify-self: start;
+  }
+
+  .referenceAppArtwork {
+    max-width: 54rem;
+    margin: 0 auto;
+  }
+}
+
+@media (max-width: 639px) {
+  .referenceHeaderInner {
+    padding-inline: 1rem;
+  }
+
+  .referenceBrandTagline {
+    font-size: 1.02rem;
+  }
+
+  .referenceHeroInner,
+  .referenceFeatureGrid,
+  .referenceSemanticSection {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .referenceHeroInner {
+    padding-top: 2.3rem;
+  }
+
+  .referenceHeroPill {
+    width: 100%;
+    max-width: 23rem;
+    font-size: 0.84rem;
+  }
+
+  .referenceHeroTitle {
+    max-width: 10ch;
+    font-size: clamp(3.25rem, 17vw, 4.7rem);
+  }
+
+  .referenceHeroBody {
+    margin-top: 1.5rem;
+  }
+
+  .referenceHeroActions {
+    align-items: stretch;
+  }
+
+  .referencePrimaryButton,
+  .referenceWatchButton {
+    width: 100%;
+  }
+
+  .referenceWatchButton {
+    justify-content: flex-start;
+  }
+
+  .referenceFeatureGrid,
+  .referenceHowGrid,
+  .referenceWhyGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .referenceFeatureCard {
+    min-height: auto;
+  }
+
+  .referenceSemanticSection {
+    padding-top: 4.5rem;
+    padding-bottom: 4.5rem;
+  }
+
+  .referenceSectionTitle,
+  .referenceChefsTitle,
+  .referenceAppTitle {
+    font-size: clamp(2.8rem, 13.5vw, 4rem);
+  }
+
+  .referenceHowCard {
+    max-width: 32rem;
+    margin: 0 auto;
+    padding: 0.75rem 0;
+  }
+
+  .referenceHowArtwork,
+  .referenceWhyArtwork {
+    max-width: 29rem;
+  }
+
+  .referenceLoveCallout,
+  .referenceImpactCallout {
+    align-items: flex-start;
+    padding: 1.1rem 1.2rem;
+  }
+
+  .referenceChefNote {
+    width: 100%;
+  }
+
+  .referenceKitchenLine {
+    font-size: 0.85rem;
+  }
+
+  .referenceStoreBadges {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .referenceStoreBadge {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .footerLink,
+  .referenceNavLink,
+  .referenceNavButton,
+  .referenceGetAppButton,
+  .referencePrimaryButton,
+  .referencePlayCircle {
+    transition: none;
+  }
+}

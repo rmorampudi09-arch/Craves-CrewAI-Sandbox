@@ -1,0 +1,27 @@
+{
+  "name": "craves-api",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "latest",
+    "@fastify/helmet": "latest",
+    "dotenv": "latest",
+    "fastify": "latest",
+    "jsonwebtoken": "latest",
+    "zod": "latest",
+    "pg": "latest",
+    "bcryptjs": "latest"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "latest",
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}

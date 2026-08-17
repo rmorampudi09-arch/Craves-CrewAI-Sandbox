@@ -1,0 +1,18 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    persistCredentials: false
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.12'
+    displayName: Use Python 3.12
+  - script: |
+      set -euo pipefail
+      python -m pip install --disable-pip-version-check --no-cache-dir 'PyYAML==6.0.2'
+      python scripts/release/validate-pipeline-yaml.py
+    displayName: Parse and validate all pipeline YAML

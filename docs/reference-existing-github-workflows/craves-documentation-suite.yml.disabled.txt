@@ -1,0 +1,102 @@
+name: Craves documentation suite
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'documentation/tools/**'
+      - 'documentation/brand/**'
+      - '.github/workflows/craves-documentation-suite.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate-documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PDF dependencies
+        run: python -m pip install --disable-pip-version-check reportlab pypdf
+
+      - name: Generate documentation PDFs
+        run: python documentation/tools/generate_docs.py
+
+      - name: Validate content, page count and confidential footer
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from pypdf import PdfReader
+
+          root = Path('documentation')
+          pdfs = sorted(root.rglob('*.pdf'))
+          assert len(pdfs) == 25, f'Expected 25 PDFs, found {len(pdfs)}'
+
+          rows = []
+          forbidden = ('Plain-English explanation', 'Flow described in words')
+          for pdf in pdfs:
+              reader = PdfReader(str(pdf))
+              pages = len(reader.pages)
+              assert pages >= 50, f'{pdf}: only {pages} pages'
+              words = 0
+              min_noncover = 10**9
+              for index, page in enumerate(reader.pages):
+                  text = page.extract_text() or ''
+                  page_words = len(text.split())
+                  words += page_words
+                  if index > 0:
+                      min_noncover = min(min_noncover, page_words)
+                  for phrase in forbidden:
+                      assert phrase not in text, f'{pdf} page {index + 1}: old wording remains: {phrase}'
+                  if '10-confidential-internal' in str(pdf):
+                      assert 'Confidential — Internal Use Only.' in text, f'{pdf} page {index + 1}: missing confidential footer'
+              assert min_noncover >= 75, f'{pdf}: unexpectedly sparse page ({min_noncover} words)'
+              rows.append((str(pdf.relative_to(root)), pages, words, min_noncover))
+
+          readme = (root / 'README.md').read_text(encoding='utf-8')
+          assert 'Edition 2.0' in readme
+          assert 'user-approved Craves logo only' in readme
+          assert 'Process flow' in readme
+
+          lines = [
+              '# Documentation Validation',
+              '',
+              'Automated validation executed by `.github/workflows/craves-documentation-suite.yml`.',
+              '',
+              '| PDF | Pages | Extracted words | Minimum words on a non-cover page |',
+              '|---|---:|---:|---:|',
+          ]
+          lines += [f'| `{path}` | {pages} | {words} | {minimum} |' for path, pages, words, minimum in rows]
+          lines += [
+              '',
+              '## Result',
+              '',
+              'PASS - all 25 PDFs are at least 50 pages, use the Edition 2.0 professional-language structure, pass the minimum content-density check, and all confidential pages contain the required `Confidential — Internal Use Only.` footer.',
+              '',
+          ]
+          (root / 'VALIDATION.md').write_text('\n'.join(lines), encoding='utf-8')
+          PY
+
+      - name: Commit regenerated documentation
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add documentation
+          if git diff --cached --quiet; then
+            echo 'No generated documentation changes to commit.'
+          else
+            git commit -m 'docs: regenerate Craves documentation suite v2'
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi

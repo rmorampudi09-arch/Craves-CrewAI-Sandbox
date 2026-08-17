@@ -1,0 +1,72 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmPublisherActivation
+    displayName: Confirm enabling only DELIVERY_STATUS_CHANGED publisher
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: serviceBusNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+  - name: serviceBusFullyQualifiedNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6.servicebus.windows.net
+  - name: topicName
+    type: string
+    default: craves-domain-events
+  - name: orderSubscriptionName
+    type: string
+    default: order-service-delivery-status-changed
+  - name: orderSubscriptionRuleName
+    type: string
+    default: delivery-status-changed-only
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - bash: |
+      set -euo pipefail
+      CONFIRM='${{ parameters.confirmPublisherActivation }}'
+      if [[ "${CONFIRM,,}" != 'true' ]]; then
+        echo 'ERROR: confirmPublisherActivation must be true for this explicit runtime activation.' >&2
+        exit 1
+      fi
+      echo 'Publisher activation confirmation: PASS'
+    displayName: Require explicit publisher activation confirmation
+
+  - bash: |
+      set -euo pipefail
+      bash -n scripts/release/integration-delivery-status-publisher-enable-v3.sh
+      echo 'Publisher activation helper shell syntax: PASS'
+    displayName: Validate publisher activation helper syntax
+
+  - task: AzureCLI@2
+    displayName: Safely enable DELIVERY_STATUS_CHANGED publisher
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        bash scripts/release/integration-delivery-status-publisher-enable-v3.sh \
+          '${{ parameters.resourceGroupName }}' \
+          '${{ parameters.integrationContainerAppName }}' \
+          '${{ parameters.orderContainerAppName }}' \
+          '${{ parameters.serviceBusNamespace }}' \
+          '${{ parameters.serviceBusFullyQualifiedNamespace }}' \
+          '${{ parameters.topicName }}' \
+          '${{ parameters.orderSubscriptionName }}' \
+          '${{ parameters.orderSubscriptionRuleName }}'

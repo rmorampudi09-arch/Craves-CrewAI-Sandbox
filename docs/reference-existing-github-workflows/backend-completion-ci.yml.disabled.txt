@@ -1,0 +1,87 @@
+name: Backend completion CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/**'
+      - 'config/production/backend-completion-pack.json'
+      - 'config/production/azure-resource-inventory.json'
+      - 'scripts/release/**'
+      - 'azure-pipelines-backend-completion.yml'
+      - '.github/workflows/backend-completion-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-completion-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-integrity:
+    name: Backend source integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install YAML parser
+        run: python -m pip install --disable-pip-version-check --no-cache-dir 'PyYAML==6.0.2'
+      - name: Validate guarded backend release
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/release/validate-backend-completion-pack.sh
+          bash scripts/release/scan-secret-material.sh .
+          python scripts/release/validate-flyway-migrations.py
+          while IFS= read -r service_path; do
+            bash scripts/release/validate-dockerfiles.sh "$service_path"
+          done < <(jq -r '.services[].path' config/production/backend-completion-pack.json)
+
+  maven:
+    name: Maven verify — ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: auth
+            path: services/auth-service
+          - service: notification
+            path: services/notification-service
+          - service: user-chef
+            path: services/user-chef-service
+          - service: catalog
+            path: services/catalog-service
+          - service: integration
+            path: services/integration-service
+          - service: subscription
+            path: services/subscription-service
+          - service: order
+            path: services/order-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: ${{ matrix.path }}/pom.xml
+      - name: Maven clean verify
+        working-directory: ${{ matrix.path }}
+        run: mvn -B -ntp clean verify
+      - name: Publish test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-${{ matrix.service }}
+          path: ${{ matrix.path }}/target/surefire-reports
+          if-no-files-found: ignore
+          retention-days: 14

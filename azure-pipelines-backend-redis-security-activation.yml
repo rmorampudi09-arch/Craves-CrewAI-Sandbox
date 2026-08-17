@@ -1,0 +1,213 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmation
+    type: string
+    default: NOT_APPROVED
+  - name: phase
+    type: string
+    default: PUBLISHER
+    values:
+      - PUBLISHER
+      - CONSUMERS
+      - RATE_LIMITER
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: authContainerAppName
+    type: string
+    default: ca-craves-auth-service-prodlow
+  - name: userChefContainerAppName
+    type: string
+    default: ca-craves-user-chef-service-prod
+  - name: catalogContainerAppName
+    type: string
+    default: ca-craves-catalog-service-prodlo
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: subscriptionContainerAppName
+    type: string
+    default: ca-craves-subscription-service-p
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: notificationContainerAppName
+    type: string
+    default: ca-craves-notification-service-p
+  - name: exchangeLimit
+    type: number
+    default: 0
+  - name: refreshLimit
+    type: number
+    default: 0
+  - name: windowSeconds
+    type: number
+    default: 60
+  - name: trustForwardedFor
+    type: boolean
+    default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: AzureCLI@2
+    displayName: Apply staged Redis security phase
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        if [[ '${{ parameters.confirmation }}' != 'APPROVE_REDIS_SECURITY_ACTIVATION' ]]; then
+          echo 'Explicit Redis security activation confirmation is required.' >&2
+          exit 1
+        fi
+
+        RG='${{ parameters.resourceGroupName }}'
+        PHASE='${{ parameters.phase }}'
+        AUTH='${{ parameters.authContainerAppName }}'
+        USER_CHEF='${{ parameters.userChefContainerAppName }}'
+        CATALOG='${{ parameters.catalogContainerAppName }}'
+        ORDER='${{ parameters.orderContainerAppName }}'
+        SUBSCRIPTION='${{ parameters.subscriptionContainerAppName }}'
+        INTEGRATION='${{ parameters.integrationContainerAppName }}'
+        NOTIFICATION='${{ parameters.notificationContainerAppName }}'
+        KEY_PREFIX='craves:auth:revocation'
+
+        apps=("$AUTH" "$USER_CHEF" "$CATALOG" "$ORDER" "$SUBSCRIPTION" "$INTEGRATION" "$NOTIFICATION")
+
+        read_env_value() {
+          local app="$1"
+          local name="$2"
+          az containerapp show \
+            --resource-group "$RG" \
+            --name "$app" \
+            --query "properties.template.containers[0].env[?name=='$name']|[0].value" \
+            --output tsv
+        }
+
+        require_redis_secret_ref() {
+          local app="$1"
+          az containerapp show --resource-group "$RG" --name "$app" --output none
+          local secret_ref
+          secret_ref=$(az containerapp show \
+            --resource-group "$RG" \
+            --name "$app" \
+            --query "properties.template.containers[0].env[?name=='SPRING_DATA_REDIS_URL']|[0].secretRef" \
+            --output tsv)
+          if [[ -z "$secret_ref" ]]; then
+            echo "ERROR: $app must bind SPRING_DATA_REDIS_URL through a Container App secretRef." >&2
+            exit 1
+          fi
+        }
+
+        wait_ready() {
+          local app="$1"
+          local expected_name="$2"
+          local expected_value="$3"
+          local latest ready running actual
+          for attempt in $(seq 1 60); do
+            latest=$(az containerapp show -g "$RG" -n "$app" --query properties.latestRevisionName -o tsv)
+            ready=$(az containerapp show -g "$RG" -n "$app" --query properties.latestReadyRevisionName -o tsv)
+            running=$(az containerapp show -g "$RG" -n "$app" --query properties.runningStatus -o tsv)
+            actual=$(read_env_value "$app" "$expected_name")
+            echo "Attempt $attempt/60 app=$app latest=$latest ready=$ready running=$running $expected_name=$actual"
+            if [[ -n "$latest" && "$latest" == "$ready" && "$running" == 'Running' && "${actual,,}" == "${expected_value,,}" ]]; then
+              return 0
+            fi
+            sleep 10
+          done
+          echo "ERROR: $app did not become ready with $expected_name=$expected_value." >&2
+          exit 1
+        }
+
+        case "$PHASE" in
+          PUBLISHER)
+            require_redis_secret_ref "$AUTH"
+            az containerapp update \
+              --resource-group "$RG" \
+              --name "$AUTH" \
+              --set-env-vars \
+                CRAVES_TOKEN_REVOCATION_PUBLISHER_ENABLED=true \
+                CRAVES_TOKEN_REVOCATION_ENABLED=false \
+                CRAVES_AUTH_RATE_LIMIT_ENABLED=false \
+                CRAVES_TOKEN_REVOCATION_FAIL_CLOSED=true \
+                CRAVES_TOKEN_REVOCATION_KEY_PREFIX="$KEY_PREFIX" \
+              --output none
+            wait_ready "$AUTH" CRAVES_TOKEN_REVOCATION_PUBLISHER_ENABLED true
+            echo 'Revocation publisher enabled. API consumers and Auth rate limiting remain disabled.'
+            ;;
+
+          CONSUMERS)
+            publisher=$(read_env_value "$AUTH" 'CRAVES_TOKEN_REVOCATION_PUBLISHER_ENABLED')
+            if [[ "${publisher,,}" != 'true' ]]; then
+              echo 'ERROR: Auth revocation publisher must be enabled and validated before consumers.' >&2
+              exit 1
+            fi
+            for app in "${apps[@]}"; do
+              require_redis_secret_ref "$app"
+              az containerapp update \
+                --resource-group "$RG" \
+                --name "$app" \
+                --set-env-vars \
+                  CRAVES_TOKEN_REVOCATION_ENABLED=true \
+                  CRAVES_TOKEN_REVOCATION_FAIL_CLOSED=true \
+                  CRAVES_TOKEN_REVOCATION_KEY_PREFIX="$KEY_PREFIX" \
+                --output none
+              wait_ready "$app" CRAVES_TOKEN_REVOCATION_ENABLED true
+            done
+            echo 'Distributed revocation consumers enabled on all seven Spring services.'
+            ;;
+
+          RATE_LIMITER)
+            publisher=$(read_env_value "$AUTH" 'CRAVES_TOKEN_REVOCATION_PUBLISHER_ENABLED')
+            consumer=$(read_env_value "$AUTH" 'CRAVES_TOKEN_REVOCATION_ENABLED')
+            if [[ "${publisher,,}" != 'true' || "${consumer,,}" != 'true' ]]; then
+              echo 'ERROR: Auth revocation publisher and consumer must be enabled before rate limiting.' >&2
+              exit 1
+            fi
+            if (( ${{ parameters.exchangeLimit }} < 1 || ${{ parameters.refreshLimit }} < 1 )); then
+              echo 'ERROR: Explicit positive exchangeLimit and refreshLimit values are required.' >&2
+              exit 1
+            fi
+            if (( ${{ parameters.windowSeconds }} < 1 || ${{ parameters.windowSeconds }} > 3600 )); then
+              echo 'ERROR: windowSeconds must be between 1 and 3600.' >&2
+              exit 1
+            fi
+            require_redis_secret_ref "$AUTH"
+            TRUST='${{ parameters.trustForwardedFor }}'
+            TRUST="${TRUST,,}"
+            az containerapp update \
+              --resource-group "$RG" \
+              --name "$AUTH" \
+              --set-env-vars \
+                CRAVES_AUTH_RATE_LIMIT_ENABLED=true \
+                CRAVES_AUTH_RATE_LIMIT_EXCHANGE_LIMIT='${{ parameters.exchangeLimit }}' \
+                CRAVES_AUTH_RATE_LIMIT_REFRESH_LIMIT='${{ parameters.refreshLimit }}' \
+                CRAVES_AUTH_RATE_LIMIT_WINDOW_SECONDS='${{ parameters.windowSeconds }}' \
+                CRAVES_AUTH_RATE_LIMIT_TRUST_FORWARDED_FOR="$TRUST" \
+              --output none
+            wait_ready "$AUTH" CRAVES_AUTH_RATE_LIMIT_ENABLED true
+            echo 'Auth exchange and refresh rate limiting enabled with explicit operator-supplied limits.'
+            ;;
+
+          *)
+            echo "ERROR: Unsupported phase $PHASE" >&2
+            exit 1
+            ;;
+        esac
+
+        echo '========== REDIS SECURITY READ-BACK =========='
+        for app in "${apps[@]}"; do
+          az containerapp show \
+            --resource-group "$RG" \
+            --name "$app" \
+            --query "{app:name,latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,running:properties.runningStatus,publisher:properties.template.containers[0].env[?name=='CRAVES_TOKEN_REVOCATION_PUBLISHER_ENABLED']|[0].value,consumer:properties.template.containers[0].env[?name=='CRAVES_TOKEN_REVOCATION_ENABLED']|[0].value,failClosed:properties.template.containers[0].env[?name=='CRAVES_TOKEN_REVOCATION_FAIL_CLOSED']|[0].value,rateLimit:properties.template.containers[0].env[?name=='CRAVES_AUTH_RATE_LIMIT_ENABLED']|[0].value}" \
+            --output json
+        done
+
+        echo 'No Redis resource, secret, key, database, APIM operation or other Azure resource was created by this pipeline.'

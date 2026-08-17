@@ -1,0 +1,29 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: integrationAppName
+    type: string
+    default: ca-craves-integration-service-pr
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    persistCredentials: false
+  - task: AzureCLI@2
+    displayName: Verify fail-closed source and runtime controls
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        chmod +x scripts/release/verify-failclosed-controls.sh
+        scripts/release/verify-failclosed-controls.sh \
+          '${{ parameters.resourceGroupName }}' \
+          '${{ parameters.integrationAppName }}'

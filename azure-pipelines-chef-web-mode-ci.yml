@@ -1,0 +1,32 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Build and test chef web shell
+  - script: |
+      set -euo pipefail
+      grep -q 'chefEnabled' apps/customer-web-next/src/lib/chef-mode-contract.ts
+      grep -q 'craves_access_token' apps/customer-web-next/src/app/api/chef/me/route.ts
+      if grep -REn '(localStorage|sessionStorage|console\.(log|debug)|accessToken)' \
+        apps/customer-web-next/src/app/chef \
+        apps/customer-web-next/src/components/chef-mode-dashboard.tsx; then
+        echo 'ERROR: Chef web shell exposes insecure storage, tokens or debug logging.' >&2
+        exit 1
+      fi
+      echo 'Chef web role and privacy gates passed.'
+    displayName: Verify chef mode security gates

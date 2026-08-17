@@ -1,0 +1,23 @@
+<policies>
+  <inbound>
+    <base />
+    <choose>
+      <when condition="@(!context.Request.Headers.ContainsKey(&quot;Authorization&quot;) || !context.Request.Headers.GetValueOrDefault(&quot;Authorization&quot;, &quot;&quot;).StartsWith(&quot;Bearer &quot;, System.StringComparison.OrdinalIgnoreCase))">
+        <return-response>
+          <set-status code="401" reason="Unauthorized" />
+          <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
+          <set-body>{"error":"AUTHENTICATION_REQUIRED","message":"A Bearer access token is required."}</set-body>
+        </return-response>
+      </when>
+    </choose>
+    <set-backend-service base-url="__BACKEND_URL__" />
+  </inbound>
+  <backend><base /></backend>
+  <outbound>
+    <base />
+    <set-header name="Cache-Control" exists-action="override"><value>no-store, no-cache, must-revalidate</value></set-header>
+    <set-header name="Pragma" exists-action="override"><value>no-cache</value></set-header>
+    <set-header name="X-Content-Type-Options" exists-action="override"><value>nosniff</value></set-header>
+  </outbound>
+  <on-error><base /></on-error>
+</policies>

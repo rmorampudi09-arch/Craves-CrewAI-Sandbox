@@ -1,0 +1,68 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmRollback
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: acrName
+    type: string
+    default: cravesprodlowacr82121
+  - name: containerAppName
+    type: string
+    default: ca-craves-admin-web-prodlow
+  - name: rollbackImageTag
+    type: string
+    default: ""
+
+variables:
+  imageRepository: craves/admin-web
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+  - task: AzureCLI@2
+    displayName: Roll back admin Container App image
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        CONFIRM='${{ parameters.confirmRollback }}'
+        [[ "${CONFIRM,,}" == 'true' ]] || { echo 'ERROR: Set confirmRollback=true.' >&2; exit 1; }
+        RG='${{ parameters.resourceGroupName }}'
+        ACR='${{ parameters.acrName }}'
+        APP='${{ parameters.containerAppName }}'
+        TAG='${{ parameters.rollbackImageTag }}'
+        [[ "$TAG" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { echo 'ERROR: Provide an exact immutable rollback image tag.' >&2; exit 1; }
+        LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv)
+        az acr repository show-tags --name "$ACR" --repository '$(imageRepository)' --query "[?@=='$TAG'] | [0]" -o tsv | grep -Fx "$TAG" >/dev/null || {
+          echo 'ERROR: Approved rollback image tag does not exist in ACR.' >&2
+          exit 1
+        }
+        IMAGE="$LOGIN_SERVER/$(imageRepository):$TAG"
+        CURRENT=$(az containerapp show -g "$RG" -n "$APP" --query 'properties.template.containers[0].image' -o tsv)
+        [[ -n "$CURRENT" && "$CURRENT" != "$IMAGE" ]] || { echo 'ERROR: Current or rollback image is invalid.' >&2; exit 1; }
+        az containerapp update -g "$RG" -n "$APP" --image "$IMAGE" --no-wait -o none
+        for attempt in $(seq 1 60); do
+          JSON=$(az containerapp show -g "$RG" -n "$APP" -o json)
+          LATEST=$(jq -r '.properties.latestRevisionName // ""' <<<"$JSON")
+          READY=$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$JSON")
+          RUNNING=$(jq -r '.properties.runningStatus // ""' <<<"$JSON")
+          ACTUAL=$(jq -r '.properties.template.containers[0].image // ""' <<<"$JSON")
+          if [[ "$LATEST" == "$READY" && "$RUNNING" == 'Running' && "$ACTUAL" == "$IMAGE" ]]; then
+            FQDN=$(jq -r '.properties.configuration.ingress.fqdn // ""' <<<"$JSON")
+            curl --fail --silent --show-error --max-time 30 "https://$FQDN/admin" >/dev/null
+            echo "SUCCESS: Admin image rolled back. Replaced image: $CURRENT"
+            exit 0
+          fi
+          sleep 10
+        done
+        echo "ERROR: Rollback revision did not become healthy. Replaced image was: $CURRENT" >&2
+        exit 1

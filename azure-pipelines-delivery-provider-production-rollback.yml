@@ -1,0 +1,48 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmDisableDeliveryProvider
+    type: boolean
+    default: false
+
+variables:
+  resourceGroup: rg-craves-prodlow-centralindia
+  containerApp: ca-craves-integration-service-pr
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+
+  - ${{ if eq(parameters.confirmDisableDeliveryProvider, true) }}:
+    - task: AzureCLI@2
+      displayName: Disable delivery execution and provider
+      inputs:
+        azureSubscription: $(AZURE_SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          az containerapp update -g '$(resourceGroup)' -n '$(containerApp)' \
+            --set-env-vars \
+              CRAVES_DELIVERY_COMMAND_ENABLED=false \
+              CRAVES_DELIVERY_RECONCILIATION_ENABLED=false \
+              CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED=false \
+              CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED=false \
+              CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED=false \
+              BORZO_API_ENABLED=false \
+              BORZO_PRODUCTION_ACTIVATION_APPROVED=false \
+              CRAVES_DELIVERY_INTELLIGENCE_ENABLED=true >/dev/null
+          values="$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query 'properties.template.containers[0].env' -o json)"
+          for name in CRAVES_DELIVERY_COMMAND_ENABLED CRAVES_DELIVERY_RECONCILIATION_ENABLED CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED BORZO_API_ENABLED; do
+            value="$(jq -r --arg name "$name" '.[] | select(.name == $name) | .value' <<<"$values" | tail -1)"
+            [[ "$value" == 'false' ]] || { echo "$name did not return to false." >&2; exit 2; }
+          done
+
+  - ${{ if ne(parameters.confirmDisableDeliveryProvider, true) }}:
+    - bash: |
+        echo 'confirmDisableDeliveryProvider must be true.' >&2
+        exit 2
+      displayName: Block unconfirmed rollback

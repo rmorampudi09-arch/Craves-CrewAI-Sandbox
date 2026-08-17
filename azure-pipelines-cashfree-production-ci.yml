@@ -1,0 +1,120 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/integration-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify Integration Service Cashfree hardening
+
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: 24.x
+
+  - bash: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm ci --no-audit --no-fund
+      npm run lint
+      npm run typecheck
+      npm run test
+    displayName: Verify Cashfree customer-web contracts and public routes
+
+  - bash: |
+      set -euo pipefail
+      properties=services/integration-service/src/main/java/in/craves/integration/config/PaymentProviderProperties.java
+      inbox=services/integration-service/src/main/java/in/craves/integration/payment/CashfreeWebhookInboxService.java
+      dispatcher=services/integration-service/src/main/java/in/craves/integration/payment/CashfreeWebhookDispatcher.java
+      verifier=services/integration-service/src/main/java/in/craves/integration/payment/CashfreeWebhookProviderVerifier.java
+      safety=services/integration-service/src/main/java/in/craves/integration/payment/CashfreeRequestSafety.java
+      checkout=services/integration-service/src/main/java/in/craves/integration/service/PaymentService.java
+      subscription=services/integration-service/src/main/java/in/craves/integration/subscription/SubscriptionPaymentService.java
+      activation=azure-pipelines-cashfree-production-activation.yml
+      merchant_identity=azure-pipelines-cashfree-customer-web-merchant-identity.yml
+      webhook_policy=infra/apim/customer-payments/cashfree-webhook-policy.xml
+      webhook_script=scripts/apim/configure-cashfree-webhook-apim.sh
+      webhook_pipeline=azure-pipelines-cashfree-webhook-apim.yml
+      web_readiness=apps/customer-web-next/src/app/api/readiness/cashfree/route.ts
+      contact=apps/customer-web-next/src/app/contact/page.tsx
+      pricing=apps/customer-web-next/src/app/products-pricing/page.tsx
+
+      grep -Fq '${CRAVES_CASHFREE_PRODUCTION_ACTIVATION_APPROVED:false}' "$properties"
+      grep -Fq '${CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED:false}' "$properties"
+      grep -Fq 'worker-enabled: ${CRAVES_CASHFREE_WEBHOOK_WORKER_ENABLED:false}' \
+        services/integration-service/src/main/resources/application.yml
+      grep -Fq 'FOR UPDATE SKIP LOCKED' "$inbox"
+      grep -Fq 'providerVerifier.verifySuccessfulPayment(payload);' "$dispatcher"
+      grep -Fq '/pg/orders/{orderId}/payments/{paymentId}' "$verifier"
+
+      grep -Fq '.header("x-idempotency-key", checkout.id().toString())' "$checkout"
+      grep -Fq 'CashfreeRequestSafety.normalizeIndianPhone' "$checkout"
+      grep -Fq 'CashfreeRequestSafety.safeReturnUrl' "$checkout"
+      grep -Fq 'CashfreeRequestSafety.requireCreateOrderResponse' "$checkout"
+      grep -Fq 'CashfreeRequestSafety.requireMoney' "$checkout"
+      grep -Fq 'paidTransition' "$checkout"
+
+      grep -Fq 'CashfreeRequestSafety.normalizeIndianPhone' "$subscription"
+      grep -Fq 'CashfreeRequestSafety.safeReturnUrl' "$subscription"
+      grep -Fq 'CashfreeRequestSafety.requireCreateOrderResponse' "$subscription"
+      grep -Fq 'Customer phone must be a valid 10-digit Indian mobile number' "$safety"
+      grep -Fq 'Payment return URL must use the configured Craves domain' "$safety"
+
+      test -f "$contact"
+      test -f apps/customer-web-next/src/app/terms/page.tsx
+      test -f apps/customer-web-next/src/app/refunds-cancellations/page.tsx
+      test -f apps/customer-web-next/src/app/privacy/page.tsx
+      test -f apps/customer-web-next/src/app/security/page.tsx
+      test -f "$pricing"
+      test -f "$web_readiness"
+      grep -Fq 'data-craves-policy-status={policyStatus}' \
+        apps/customer-web-next/src/components/legal/PublicPolicyPage.tsx
+      grep -Fq 'CRAVES_PUBLIC_SUPPORT_PHONE' "$contact"
+      grep -Fq 'CRAVES_REGISTERED_BUSINESS_NAME' "$contact"
+      grep -Fq 'data-craves-live-pricing-status' "$pricing"
+      grep -Fq '/catalog/kitchens?city=Hyderabad' "$pricing"
+      grep -Fq 'item.currency === "INR"' "$pricing"
+      grep -Fq 'cashfreeMode === "production"' "$web_readiness"
+      grep -Fq 'publicSupportPhoneConfigured' "$web_readiness"
+      grep -Fq 'registeredBusinessNameConfigured' "$web_readiness"
+      grep -Fq '/products-pricing' "$web_readiness"
+
+      grep -Fq '/api/readiness/cashfree' "$activation"
+      grep -Fq 'Customer web is not built in Cashfree production mode.' "$activation"
+      grep -Fq 'data-craves-policy-status="approved"' "$activation"
+      grep -Fq 'data-craves-live-pricing-status="ready"' "$activation"
+      grep -Fq 'Run the Cashfree webhook APIM pipeline first.' "$activation"
+
+      test -f "$merchant_identity"
+      grep -Fq 'CRAVES_PUBLIC_SUPPORT_PHONE_INPUT' "$merchant_identity"
+      grep -Fq 'CRAVES_REGISTERED_BUSINESS_NAME_INPUT' "$merchant_identity"
+      grep -Fq "azureSubscription: 'Craves-Dev-Service-Connection'" "$merchant_identity"
+
+      test -f "$webhook_policy"
+      test -f "$webhook_script"
+      test -f "$webhook_pipeline"
+      grep -Fq 'x-webhook-timestamp' "$webhook_policy"
+      grep -Fq 'x-webhook-signature' "$webhook_policy"
+      grep -Fq 'x-webhook-version' "$webhook_policy"
+      grep -Fq '__PAYMENT_BACKEND_URL__' "$webhook_policy"
+      ! grep -Fq 'validate-jwt' "$webhook_policy"
+      ! grep -Fq 'Bearer ' "$webhook_policy"
+      grep -Fq 'urlTemplate": "/webhooks/cashfree"' "$webhook_script"
+      grep -Fq 'expected HTTP 400 for missing provider headers' "$webhook_script"
+      grep -Fq "azureSubscription: 'Craves-Dev-Service-Connection'" "$webhook_pipeline"
+    displayName: Verify production payment, public web, merchant identity and APIM safety guards

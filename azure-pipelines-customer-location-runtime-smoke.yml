@@ -1,0 +1,91 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: baseUrl
+    type: string
+    default: https://craves.in
+  - name: azureMapsAccount
+    type: string
+    default: maps-craves-prodlow-l3ing6
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: customerWebContainerApp
+    type: string
+    default: ca-craves-web-prodlow
+
+variables:
+  AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection
+  expectedSubscriptionId: 4f897b61-9b52-44b4-8cf1-bdac281cc1aa
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    fetchDepth: 1
+
+  - script: |
+      set -euo pipefail
+      bash -n scripts/release/customer-location-runtime-smoke.sh
+    displayName: Validate location smoke script
+
+  - task: AzureCLI@2
+    displayName: Verify Azure Maps runtime wiring read-only
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        az account set --subscription "$(expectedSubscriptionId)"
+
+        MAPS_JSON="$(az maps account show \
+          --subscription "$(expectedSubscriptionId)" \
+          --resource-group '${{ parameters.resourceGroupName }}' \
+          --account-name '${{ parameters.azureMapsAccount }}' \
+          -o json \
+          --only-show-errors)"
+        MAPS_ID="$(jq -r '.id // ""' <<<"$MAPS_JSON")"
+        MAPS_CLIENT_ID="$(jq -r '.properties.uniqueId // ""' <<<"$MAPS_JSON")"
+        MAPS_KIND="$(jq -r '.kind // ""' <<<"$MAPS_JSON")"
+        MAPS_SKU="$(jq -r '.sku.name // ""' <<<"$MAPS_JSON")"
+        LOCAL_AUTH_DISABLED="$(jq -r '.properties.disableLocalAuth // false' <<<"$MAPS_JSON")"
+
+        [[ -n "$MAPS_ID" && -n "$MAPS_CLIENT_ID" ]] || { echo 'Azure Maps ID/client ID missing' >&2; exit 1; }
+        [[ "$MAPS_KIND" == 'Gen2' ]] || { echo "Unexpected Maps kind: $MAPS_KIND" >&2; exit 1; }
+        [[ "$MAPS_SKU" == 'G2' ]] || { echo "Unexpected Maps SKU: $MAPS_SKU" >&2; exit 1; }
+        [[ "${LOCAL_AUTH_DISABLED,,}" == 'true' ]] || { echo 'Azure Maps local auth is not disabled' >&2; exit 1; }
+
+        APP_JSON="$(az containerapp show \
+          --subscription "$(expectedSubscriptionId)" \
+          --resource-group '${{ parameters.resourceGroupName }}' \
+          --name '${{ parameters.customerWebContainerApp }}' \
+          -o json \
+          --only-show-errors)"
+        PRINCIPAL_ID="$(jq -r '.identity.principalId // ""' <<<"$APP_JSON")"
+        CONFIGURED_CLIENT_ID="$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "AZURE_MAPS_CLIENT_ID") | .value][0] // ""' <<<"$APP_JSON")"
+        CONFIGURED_ENDPOINT="$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "AZURE_MAPS_ENDPOINT") | .value][0] // ""' <<<"$APP_JSON")"
+        [[ -n "$PRINCIPAL_ID" ]] || { echo 'Customer web managed identity missing' >&2; exit 1; }
+        [[ "$CONFIGURED_CLIENT_ID" == "$MAPS_CLIENT_ID" ]] || { echo 'Container App Maps client ID does not match Maps account' >&2; exit 1; }
+        [[ "$CONFIGURED_ENDPOINT" == 'https://atlas.microsoft.com' ]] || { echo 'Container App Maps endpoint is incorrect' >&2; exit 1; }
+
+        ROLE_COUNT="$(az role assignment list \
+          --subscription "$(expectedSubscriptionId)" \
+          --assignee-object-id "$PRINCIPAL_ID" \
+          --scope "$MAPS_ID" \
+          --query "[?roleDefinitionName=='Azure Maps Data Reader'] | length(@)" \
+          -o tsv \
+          --only-show-errors)"
+        [[ "$ROLE_COUNT" != '0' && -n "$ROLE_COUNT" ]] || { echo 'Azure Maps Data Reader role missing' >&2; exit 1; }
+
+        echo "Azure Maps runtime wiring is valid for managed identity $PRINCIPAL_ID."
+
+  - script: |
+      set -euo pipefail
+      chmod +x scripts/release/customer-location-runtime-smoke.sh
+      CRAVES_BASE_URL='${{ parameters.baseUrl }}' \
+        scripts/release/customer-location-runtime-smoke.sh
+    displayName: Run live Craves reverse-geocoding smoke

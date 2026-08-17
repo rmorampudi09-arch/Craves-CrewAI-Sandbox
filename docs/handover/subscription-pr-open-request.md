@@ -1,0 +1,1 @@
+Open PR after CI preflight. Canonical handover: `2026-08-11-subscription-production-completion.md`.

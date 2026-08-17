@@ -1,0 +1,167 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: containerApps
+    type: string
+    default: ca-craves-auth-service-prodlow,ca-craves-user-chef-service-prod,ca-craves-catalog-service-prodlo,ca-craves-order-service-prodlow,ca-craves-integration-service-pr
+  - name: integrationAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: stackStartPr
+    type: number
+    default: 68
+  - name: stackEndPr
+    type: number
+    default: 82
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: SourceIntegrity
+    displayName: Source and configuration integrity
+    jobs:
+      - job: SourceGates
+        displayName: Run non-runtime source gates
+        steps:
+          - checkout: self
+            persistCredentials: false
+            fetchDepth: 1
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.12'
+            displayName: Use Python 3.12
+          - script: |
+              set -euo pipefail
+              sudo apt-get update -qq
+              sudo apt-get install -y --no-install-recommends libxml2-utils
+              python -m pip install --disable-pip-version-check --no-cache-dir 'PyYAML==6.0.2'
+              chmod +x scripts/release/*.sh
+              scripts/release/verify-release-gate-inventory.sh .
+              python scripts/release/validate-pipeline-yaml.py
+              scripts/release/scan-secret-material.sh .
+              scripts/release/validate-dockerfiles.sh .
+              python scripts/release/validate-flyway-migrations.py
+              scripts/release/validate-apim-assets.sh .
+              scripts/release/validate-rollback-readiness.sh .
+            displayName: Run source-only release gates
+
+  - stage: CompileAndTest
+    displayName: Compile and test locked technology stacks
+    dependsOn: SourceIntegrity
+    condition: succeeded()
+    jobs:
+      - job: JavaServices
+        displayName: Java 21 service verification
+        steps:
+          - checkout: self
+            persistCredentials: false
+          - task: JavaToolInstaller@0
+            inputs:
+              versionSpec: '21'
+              jdkArchitectureOption: x64
+              jdkSourceOption: PreInstalled
+            displayName: Use Java 21
+          - script: |
+              set -euo pipefail
+              chmod +x scripts/release/validate-java21-maven.sh
+              scripts/release/validate-java21-maven.sh .
+            displayName: Maven verify all services
+      - job: NodeApplications
+        displayName: Node 24 lockfile and build verification
+        steps:
+          - checkout: self
+            persistCredentials: false
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '24.x'
+            displayName: Use Node.js 24
+          - script: |
+              set -euo pipefail
+              chmod +x scripts/release/validate-node-lockfiles.sh
+              scripts/release/validate-node-lockfiles.sh .
+            displayName: npm ci, typecheck, test and build
+
+  - stage: PullRequestStack
+    displayName: Stacked pull-request validation
+    dependsOn: CompileAndTest
+    condition: succeeded()
+    jobs:
+      - job: GitHubMetadata
+        displayName: Validate release PR dependency chain
+        steps:
+          - checkout: self
+            persistCredentials: false
+          - script: |
+              set -euo pipefail
+              [[ -n "${GH_TOKEN:-}" ]] || { echo 'ERROR: configure secret variable GITHUB_TOKEN_READONLY.' >&2; exit 1; }
+              chmod +x scripts/release/validate-stacked-pr-chain.sh
+              scripts/release/validate-stacked-pr-chain.sh \
+                "$(Build.Repository.Name)" \
+                '${{ parameters.stackStartPr }}' \
+                '${{ parameters.stackEndPr }}'
+            env:
+              GH_TOKEN: $(GITHUB_TOKEN_READONLY)
+            displayName: Validate open draft mergeable stack
+
+  - stage: AzureReadiness
+    displayName: Read-only Azure runtime readiness
+    dependsOn: PullRequestStack
+    condition: succeeded()
+    jobs:
+      - job: RuntimeReadiness
+        displayName: Verify existing Container Apps without mutation
+        steps:
+          - checkout: self
+            persistCredentials: false
+          - task: AzureCLI@2
+            displayName: Run read-only Azure release gates
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                chmod +x scripts/release/*.sh
+                scripts/release/verify-containerapps-readonly.sh \
+                  '${{ parameters.resourceGroupName }}' \
+                  '${{ parameters.containerApps }}'
+                scripts/release/verify-failclosed-controls.sh \
+                  '${{ parameters.resourceGroupName }}' \
+                  '${{ parameters.integrationAppName }}'
+                scripts/release/smoke-containerapp-health.sh \
+                  '${{ parameters.resourceGroupName }}' \
+                  '${{ parameters.containerApps }}'
+                scripts/release/verify-observability-baseline.sh \
+                  '${{ parameters.resourceGroupName }}' \
+                  '${{ parameters.containerApps }}'
+
+  - stage: ReleaseManifest
+    displayName: Generate immutable release evidence
+    dependsOn: AzureReadiness
+    condition: succeeded()
+    jobs:
+      - job: Manifest
+        displayName: Build and publish release manifest
+        steps:
+          - checkout: self
+            persistCredentials: false
+            fetchDepth: 1
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '3.12'
+            displayName: Use Python 3.12
+          - script: |
+              set -euo pipefail
+              export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+              export CRAVES_RELEASE_MANIFEST="$(Build.ArtifactStagingDirectory)/release-manifest.json"
+              python scripts/release/generate-release-manifest.py
+              jq -e '.dirty == false and (.files | length > 0)' "$CRAVES_RELEASE_MANIFEST" >/dev/null
+            displayName: Generate exact release manifest
+          - publish: $(Build.ArtifactStagingDirectory)/release-manifest.json
+            artifact: craves-release-readiness-manifest
+            displayName: Publish readiness manifest

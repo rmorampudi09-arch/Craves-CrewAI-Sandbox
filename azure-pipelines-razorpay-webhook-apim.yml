@@ -1,0 +1,16 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+  - task: AzureCLI@2
+    displayName: Configure and verify Razorpay webhook APIM route
+    inputs:
+      azureSubscription: Craves-Dev-Service-Connection
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: scripts/apim/configure-razorpay-webhook-apim.sh

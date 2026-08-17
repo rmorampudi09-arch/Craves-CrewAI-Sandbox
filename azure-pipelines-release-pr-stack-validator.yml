@@ -1,0 +1,39 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: startPr
+    type: number
+    default: 25
+  - name: endPr
+    type: number
+    default: 68
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    persistCredentials: false
+
+  - script: |
+      set -euo pipefail
+      chmod +x scripts/release/validate-stacked-pr-chain.sh
+      scripts/release/validate-stacked-pr-chain.sh \
+        "$(Build.Repository.Name)" \
+        '${{ parameters.startPr }}' \
+        '${{ parameters.endPr }}'
+    env:
+      GH_TOKEN: $(GITHUB_TOKEN_READONLY)
+    displayName: Validate stacked draft PR dependency chain
+
+  - script: |
+      set -euo pipefail
+      if [[ -z "${GITHUB_TOKEN_READONLY:-}" ]]; then
+        echo 'ERROR: Add a read-only GitHub token as secret variable GITHUB_TOKEN_READONLY.' >&2
+        exit 1
+      fi
+      echo 'Read-only GitHub token variable is configured.'
+    env:
+      GITHUB_TOKEN_READONLY: $(GITHUB_TOKEN_READONLY)
+    displayName: Verify read-only GitHub credential input

@@ -1,0 +1,200 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: revisionName
+    type: string
+    default: ca-craves-integration-service-pr--0000062
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: AzureCLI@2
+    displayName: Read unhealthy Integration revision diagnostics
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        set +x
+
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.integrationContainerAppName }}'
+        REV='${{ parameters.revisionName }}'
+
+        redact() {
+          sed -E \
+            -e 's/([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn])([=:][[:space:]]*)[^[:space:]",}]+/\1\2***REDACTED***/g' \
+            -e 's#(Endpoint=sb://[^;]+;SharedAccessKeyName=)[^;]+;SharedAccessKey=[^;[:space:]]+#\1***REDACTED***;SharedAccessKey=***REDACTED***#g'
+        }
+
+        echo '============================================================'
+        echo '1. CURRENT INTEGRATION CONTAINER APP STATE'
+        echo '============================================================'
+        APP_JSON=$(az containerapp show \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --output json \
+          --only-show-errors)
+
+        jq '{
+          name: .name,
+          latestRevisionName: .properties.latestRevisionName,
+          latestReadyRevisionName: .properties.latestReadyRevisionName,
+          runningStatus: .properties.runningStatus,
+          publisher: ([.properties.template.containers[0].env[]? | select(.name == "CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED")][0].value // "<absent>"),
+          deliveryCommand: ([.properties.template.containers[0].env[]? | select(.name == "CRAVES_DELIVERY_COMMAND_ENABLED")][0].value // "<absent>"),
+          reconciliation: ([.properties.template.containers[0].env[]? | select(.name == "CRAVES_DELIVERY_RECONCILIATION_ENABLED")][0].value // "<absent>"),
+          webhook: ([.properties.template.containers[0].env[]? | select(.name == "CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED")][0].value // "<absent>"),
+          tracking: ([.properties.template.containers[0].env[]? | select(.name == "CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED")][0].value // "<absent>"),
+          borzo: ([.properties.template.containers[0].env[]? | select(.name == "BORZO_API_ENABLED")][0].value // "<absent>")
+        }' <<<"$APP_JSON"
+
+        echo ''
+        echo '============================================================'
+        echo '2. RECENT REVISION STATE'
+        echo '============================================================'
+        az containerapp revision list \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --query "[].{name:name,active:properties.active,health:properties.healthState,provisioning:properties.provisioningState,replicas:properties.replicas,created:properties.createdTime}" \
+          --output table \
+          --only-show-errors || true
+
+        echo ''
+        echo '============================================================'
+        echo "3. TARGET FAILED REVISION: $REV"
+        echo '============================================================'
+        if ! REV_JSON=$(az containerapp revision show \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --revision "$REV" \
+          --output json \
+          --only-show-errors 2>&1); then
+          echo "ERROR: Revision $REV could not be read."
+          printf '%s\n' "$REV_JSON" | redact
+          exit 1
+        fi
+
+        jq '{
+          name: .name,
+          active: .properties.active,
+          healthState: .properties.healthState,
+          provisioningState: .properties.provisioningState,
+          replicas: .properties.replicas,
+          createdTime: .properties.createdTime,
+          runningState: .properties.runningState,
+          trafficWeight: .properties.trafficWeight,
+          image: .properties.template.containers[0].image,
+          resources: .properties.template.containers[0].resources,
+          probes: .properties.template.containers[0].probes,
+          minReplicas: .properties.template.scale.minReplicas,
+          maxReplicas: .properties.template.scale.maxReplicas,
+          publisher: ([.properties.template.containers[0].env[]? | select(.name == "CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED")][0].value // "<absent>"),
+          deliveryCommand: ([.properties.template.containers[0].env[]? | select(.name == "CRAVES_DELIVERY_COMMAND_ENABLED")][0].value // "<absent>"),
+          reconciliation: ([.properties.template.containers[0].env[]? | select(.name == "CRAVES_DELIVERY_RECONCILIATION_ENABLED")][0].value // "<absent>"),
+          webhook: ([.properties.template.containers[0].env[]? | select(.name == "CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED")][0].value // "<absent>"),
+          tracking: ([.properties.template.containers[0].env[]? | select(.name == "CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED")][0].value // "<absent>"),
+          borzo: ([.properties.template.containers[0].env[]? | select(.name == "BORZO_API_ENABLED")][0].value // "<absent>")
+        }' <<<"$REV_JSON"
+
+        echo ''
+        echo '============================================================'
+        echo '4. TARGET REVISION REPLICAS / CONTAINERS'
+        echo '============================================================'
+        REPLICAS_JSON=$(az containerapp replica list \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --revision "$REV" \
+          --output json \
+          --only-show-errors 2>&1 || true)
+
+        if jq -e . >/dev/null 2>&1 <<<"$REPLICAS_JSON"; then
+          jq '[.[] | {
+            replica: .name,
+            runningState: .properties.runningState,
+            containers: [.properties.containers[]? | {
+              name: .name,
+              ready: .ready,
+              started: .started,
+              restartCount: .restartCount,
+              runningState: .runningState,
+              runningStateDetails: .runningStateDetails
+            }]
+          }]' <<<"$REPLICAS_JSON"
+        else
+          echo 'Replica listing did not return JSON:'
+          printf '%s\n' "$REPLICAS_JSON" | redact
+        fi
+
+        echo ''
+        echo '============================================================'
+        echo '5. CONTAINER APP SYSTEM LOGS (READ-ONLY)'
+        echo '============================================================'
+        SYSTEM_LOGS=$(az containerapp logs show \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --type system \
+          --tail 300 \
+          --format text \
+          --only-show-errors 2>&1 || true)
+        printf '%s\n' "$SYSTEM_LOGS" | redact
+
+        echo ''
+        echo '============================================================'
+        echo '6. FAILED REVISION CONSOLE LOGS (READ-ONLY)'
+        echo '============================================================'
+        LOGGED=false
+        if jq -e . >/dev/null 2>&1 <<<"$REPLICAS_JSON"; then
+          while IFS=$'\t' read -r REPLICA CONTAINER; do
+            [[ -n "$REPLICA" && -n "$CONTAINER" ]] || continue
+            LOGGED=true
+            echo "----- revision=$REV replica=$REPLICA container=$CONTAINER -----"
+            CONSOLE_LOGS=$(az containerapp logs show \
+              --resource-group "$RG" \
+              --name "$APP" \
+              --revision "$REV" \
+              --replica "$REPLICA" \
+              --container "$CONTAINER" \
+              --type console \
+              --tail 300 \
+              --format text \
+              --only-show-errors 2>&1 || true)
+            printf '%s\n' "$CONSOLE_LOGS" | redact
+          done < <(jq -r '.[] | .name as $replica | .properties.containers[]? | [$replica, .name] | @tsv' <<<"$REPLICAS_JSON")
+        fi
+
+        if [[ "$LOGGED" != true ]]; then
+          echo 'No replica/container pair remained addressable for the failed revision.'
+          echo 'Falling back to app-level console logs; these may come from the current revision.'
+          CONSOLE_LOGS=$(az containerapp logs show \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --type console \
+            --tail 300 \
+            --format text \
+            --only-show-errors 2>&1 || true)
+          printf '%s\n' "$CONSOLE_LOGS" | redact
+        fi
+
+        echo ''
+        echo '============================================================'
+        echo '7. DIAGNOSTIC RESULT'
+        echo '============================================================'
+        echo 'READ-ONLY DIAGNOSTICS: COMPLETE'
+        echo "Target revision: $REV"
+        echo 'Azure resources changed: NO'
+        echo 'Runtime flags changed: NO'
+        echo 'Traffic changed: NO'
+        echo 'Secrets/credentials read: NO'
+        echo 'RBAC changed: NO'

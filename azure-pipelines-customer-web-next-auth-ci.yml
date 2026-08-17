@@ -1,0 +1,44 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  appPath: apps/customer-web-next
+
+steps:
+  - checkout: self
+
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: '24.x'
+
+  - script: |
+      set -euo pipefail
+      cd "$(appPath)"
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      NEXT_PUBLIC_FIREBASE_API_KEY=ci-public-api-key \
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=ci.firebaseapp.com \
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID=ci-project \
+      NEXT_PUBLIC_FIREBASE_APP_ID=1:123:web:ci \
+      CRAVES_API_BASE_URL=https://example.invalid/api/v1 \
+      npm run build
+    displayName: Typecheck, test and build auth-enabled customer web
+
+  - script: |
+      set -euo pipefail
+      grep -q 'httpOnly: true' apps/customer-web-next/src/app/api/auth/session/route.ts
+      grep -q 'sameSite: "lax"' apps/customer-web-next/src/app/api/auth/session/route.ts
+      grep -q 'sameOrigin' apps/customer-web-next/src/app/api/auth/session/route.ts
+      grep -q 'firebase/exchange' apps/customer-web-next/src/app/api/auth/session/route.ts
+      grep -q 'craves_access_token' apps/customer-web-next/src/app/api/auth/logout/route.ts
+      if grep -REn '(localStorage|sessionStorage).*token|copyAccessToken|refreshToken.*NextResponse\.json' apps/customer-web-next/src; then
+        echo 'ERROR: Auth module exposes or stores tokens in browser code.' >&2
+        exit 1
+      fi
+      echo 'Secure auth-session controls verified.'
+    displayName: Verify token and cookie safety

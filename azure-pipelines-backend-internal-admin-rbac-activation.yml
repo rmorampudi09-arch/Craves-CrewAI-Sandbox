@@ -1,0 +1,77 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmation
+    displayName: Type ENABLE_INTERNAL_ADMIN_RBAC
+    type: string
+    default: DO_NOT_ENABLE
+  - name: platformAdminMigrationConfirmation
+    displayName: Type PLATFORM_ADMIN_MIGRATION_VERIFIED
+    type: string
+    default: PLATFORM_ADMIN_NOT_VERIFIED
+  - name: resourceGroupName
+    displayName: Azure resource group
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: authContainerAppName
+    displayName: Auth Service Container App
+    type: string
+    default: ca-craves-auth-service-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: Validate
+    jobs:
+      - job: SourceAndConfirmation
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              [[ '${{ parameters.confirmation }}' == 'ENABLE_INTERNAL_ADMIN_RBAC' ]] || {
+                echo 'ERROR: explicit RBAC activation confirmation is required.' >&2
+                exit 1
+              }
+              [[ '${{ parameters.platformAdminMigrationConfirmation }}' == 'PLATFORM_ADMIN_MIGRATION_VERIFIED' ]] || {
+                echo 'ERROR: confirm V6 and at least one PLATFORM_ADMIN before activation.' >&2
+                exit 1
+              }
+              bash scripts/release/validate-internal-admin-rbac.sh
+            displayName: Validate source and operator confirmations
+
+  - stage: Activate
+    dependsOn: Validate
+    condition: succeeded()
+    jobs:
+      - job: EnableAuthRoleManagement
+        displayName: Enable Auth Service internal-role management
+        steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: Enable internal administrator role management
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                set +x
+                resource_group='${{ parameters.resourceGroupName }}'
+                app='${{ parameters.authContainerAppName }}'
+                az containerapp show -g "$resource_group" -n "$app" --only-show-errors >/dev/null
+                az containerapp update \
+                  -g "$resource_group" \
+                  -n "$app" \
+                  --set-env-vars CRAVES_INTERNAL_ADMIN_RBAC_API_ENABLED=true \
+                  --only-show-errors >/dev/null
+                bash scripts/release/smoke-containerapp-health.sh "$resource_group" "$app"
+                value=$(az containerapp show -g "$resource_group" -n "$app" \
+                  --query "properties.template.containers[0].env[?name=='CRAVES_INTERNAL_ADMIN_RBAC_API_ENABLED'].value | [0]" \
+                  -o tsv --only-show-errors)
+                [[ "$value" == 'true' ]] || {
+                  echo 'ERROR: RBAC API flag did not read back as true.' >&2
+                  exit 1
+                }
+                echo 'Internal administrator role management is enabled; no provider flag was changed.'

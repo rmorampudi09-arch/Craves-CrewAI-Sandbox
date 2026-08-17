@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "generatedFor": "Craves controlled production launch",
+  "targetConcurrency": "50-100 concurrent users",
+  "latestStackBranch": "feature/backend-production-readiness-completion",
+  "runtimeChangesAllowedByThisPack": false,
+  "mergeGroups": [
+    { "name": "customer-web", "pullRequests": "34-43" },
+    { "name": "chef-web", "pullRequests": "46-55" },
+    { "name": "ownership-subscription-admin", "pullRequests": "58-68" },
+    { "name": "release-readiness", "pullRequests": "69-83" },
+    { "name": "backend-launch-critical", "pullRequests": "84-100 excluding 93" },
+    { "name": "admin-platform-refinements", "pullRequests": "101-107" }
+  ],
+  "services": [
+    "services/auth-service",
+    "services/user-chef-service",
+    "services/catalog-service",
+    "services/order-service",
+    "services/subscription-service",
+    "services/integration-service",
+    "services/notification-service"
+  ],
+  "requiredDisabledByDefaultFlags": [
+    "CRAVES_ADMIN_ACCOUNT_INTERVENTION_API_ENABLED",
+    "CRAVES_ADMIN_ACCOUNT_INTERVENTION_FIREBASE_WORKER_ENABLED",
+    "CRAVES_TOKEN_REVOCATION_PUBLISHER_ENABLED",
+    "CRAVES_TOKEN_REVOCATION_ENABLED",
+    "CRAVES_AUTH_RATE_LIMIT_ENABLED",
+    "CRAVES_NOTIFICATION_DIRECT_DISPATCH_ENABLED",
+    "CRAVES_NOTIFICATION_OUTBOX_DISPATCHER_ENABLED",
+    "CRAVES_CHEF_ACCEPTANCE_WORKER_ENABLED",
+    "CRAVES_LAUNCH_POLICY_ENFORCEMENT_ENABLED",
+    "CRAVES_REFUND_STATUS_CONSUMER_ENABLED",
+    "CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED",
+    "CRAVES_SUBSCRIPTION_ORDER_CONSUMER_ENABLED",
+    "CRAVES_SUBSCRIPTION_ORDER_CALLBACK_WORKER_ENABLED",
+    "CRAVES_DOMAIN_EVENT_OUTBOX_ENABLED",
+    "CRAVES_DOMAIN_EVENT_SERVICE_BUS_ENABLED",
+    "CRAVES_SUBSCRIPTION_OCCURRENCE_GENERATOR_ENABLED",
+    "CRAVES_SUBSCRIPTION_BILLING_GENERATOR_ENABLED",
+    "CRAVES_SUBSCRIPTION_BILLING_PUBLISHER_ENABLED",
+    "CRAVES_SUBSCRIPTION_PAYMENT_STATUS_CONSUMER_ENABLED",
+    "CRAVES_SUBSCRIPTION_ORDER_REQUEST_WORKER_ENABLED",
+    "CRAVES_SUBSCRIPTION_ORDER_PUBLISHER_ENABLED",
+    "CRAVES_PAYMENT_ORDER_API_ENABLED",
+    "CRAVES_CASHFREE_WEBHOOK_INGRESS_ENABLED",
+    "CRAVES_CASHFREE_WEBHOOK_WORKER_ENABLED",
+    "CRAVES_CASHFREE_PRODUCTION_ACTIVATION_APPROVED",
+    "CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED",
+    "CRAVES_DELIVERY_INTELLIGENCE_ENABLED",
+    "CRAVES_DELIVERY_COMMAND_ENABLED",
+    "CRAVES_DELIVERY_RECONCILIATION_ENABLED",
+    "CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED",
+    "CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED",
+    "CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED",
+    "CRAVES_REFUND_CONSUMER_ENABLED",
+    "CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED",
+    "CRAVES_REFUND_RECONCILIATION_ENABLED",
+    "CRAVES_REFUND_STATUS_PUBLISHER_ENABLED",
+    "CRAVES_REFUND_PRODUCTION_PROVIDER_EXECUTION_APPROVED",
+    "CRAVES_REFUND_PRODUCTION_RECONCILIATION_APPROVED",
+    "CRAVES_SUBSCRIPTION_PAYMENT_CONSUMER_ENABLED",
+    "CRAVES_SUBSCRIPTION_PAYMENT_STATUS_PUBLISHER_ENABLED",
+    "BORZO_API_ENABLED",
+    "BORZO_PRODUCTION_ACTIVATION_APPROVED",
+    "CRAVES_SERVICEBUS_ENABLED",
+    "CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED",
+    "CRAVES_NOTIFICATION_PUSH_ENABLED",
+    "CRAVES_NOTIFICATION_EMAIL_ENABLED",
+    "CRAVES_NOTIFICATION_RECOVERY_API_ENABLED"
+  ],
+  "workstreams": [
+    {
+      "id": 1,
+      "name": "CI and source verification",
+      "execution": "Run all module CI and the final read-only orchestrator; fix every compile, test, contract and static security failure.",
+      "evidence": ["successful pipeline URLs", "test reports", "immutable source manifest"]
+    },
+    {
+      "id": 2,
+      "name": "Stacked merge control",
+      "execution": "Merge parent-first only after each child is rebased or retargeted and its CI remains green.",
+      "evidence": ["merge SHA list", "branch-chain validation", "main protection evidence"]
+    },
+    {
+      "id": 3,
+      "name": "Seven-service deployment",
+      "execution": "Build immutable images and deploy all seven Spring services with every real worker, provider, mutation API and enforcement flag disabled.",
+      "evidence": ["image digests", "Container App revision names", "health and readiness responses", "rollback revision map", "disabled-flag read-back"]
+    },
+    {
+      "id": 4,
+      "name": "Database migration verification",
+      "execution": "Allow Flyway to apply owned-schema migrations service-by-service; verify history, constraints and rollback posture without cross-database access.",
+      "evidence": ["Flyway history per service", "migration checksums", "backup timestamp", "schema ownership proof"]
+    },
+    {
+      "id": 5,
+      "name": "Cloud routing and messaging",
+      "execution": "Configure Service Bus subscriptions, managed identities, APIM operations, Key Vault references and Container App secret bindings through guarded pipelines.",
+      "evidence": ["Service Bus subscription filters", "role assignments", "APIM policy read-back", "secret-reference names only"]
+    },
+    {
+      "id": 6,
+      "name": "Provider and Redis dependencies",
+      "execution": "Validate Redis, Firebase, FCM, ACS Email, Cashfree and delivery-provider credentials and callback registrations without enabling real execution early.",
+      "evidence": ["dependency health", "credential location proof", "callback registration proof", "provider sandbox or controlled-test evidence"]
+    },
+    {
+      "id": 7,
+      "name": "Staged activation and rollback",
+      "execution": "Enable consumers before publishers, webhook ingress before its worker, payment APIs only after webhook readiness, and local account controls before Firebase workers; capture reverse-order rollback evidence.",
+      "evidence": ["flag snapshots before and after", "activation pipeline URLs", "rollback pipeline dry-run and controlled evidence"]
+    },
+    {
+      "id": 8,
+      "name": "Production validation",
+      "execution": "Complete authorization, security, load, backup/restore, observability and controlled real-provider field tests before go-live approval.",
+      "evidence": ["security report", "load report", "restore rehearsal", "alert test", "field-test sign-off"]
+    }
+  ],
+  "hardStops": [
+    "Do not enable a provider, mutation API or worker because an environment is named production.",
+    "Do not invent pricing, commission, radius, refund, settlement, subscription grace or FSSAI values.",
+    "Do not merge a child before its parent.",
+    "Do not place secrets in Git, logs, pipeline parameters or chat.",
+    "Do not proceed after a failed readiness, health, audit or rollback gate."
+  ]
+}

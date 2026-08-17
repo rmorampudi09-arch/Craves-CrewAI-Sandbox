@@ -1,0 +1,96 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: apiId
+    type: string
+    default: ''
+  - name: runAuthenticatedSmoke
+    type: boolean
+    default: false
+  - name: testOrderId
+    type: string
+    default: 00000000-0000-0000-0000-000000000000
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-order-delivery-status-apim.sh
+      bash -n scripts/apim/verify-order-delivery-status-apim.sh
+      python3 -m json.tool contracts/openapi/order-delivery-status-v1.openapi.json >/dev/null
+      python3 - <<'PY'
+      import xml.etree.ElementTree as ET
+      ET.parse('infra/apim/order-delivery-status/order-delivery-status-policy.xml')
+      print('Static APIM inputs are valid.')
+      PY
+    displayName: Validate APIM rollout inputs
+
+  - task: AzureCLI@2
+    displayName: Configure customer delivery-status APIM operation
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        export RG='${{ parameters.resourceGroupName }}'
+        export APIM='${{ parameters.apimName }}'
+        export ORDER_APP='${{ parameters.orderContainerAppName }}'
+        export API_ID='${{ parameters.apiId }}'
+        bash scripts/apim/configure-order-delivery-status-apim.sh
+
+  - task: AzureCLI@2
+    displayName: Verify unauthenticated guard and backend mapping
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        export RG='${{ parameters.resourceGroupName }}'
+        export APIM='${{ parameters.apimName }}'
+        export ORDER_APP='${{ parameters.orderContainerAppName }}'
+        export API_ID='${{ parameters.apiId }}'
+        unset CRAVES_ACCESS_TOKEN || true
+        unset TEST_ORDER_ID || true
+        bash scripts/apim/verify-order-delivery-status-apim.sh
+
+  - ${{ if eq(parameters.runAuthenticatedSmoke, true) }}:
+      - task: AzureCLI@2
+        displayName: Run authenticated customer delivery-status smoke test
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+            if [[ -z "${CRAVES_ACCESS_TOKEN:-}" ]]; then
+              echo 'ERROR: Secret pipeline variable CRAVES_CUSTOMER_TEST_TOKEN is required when runAuthenticatedSmoke=true.' >&2
+              exit 1
+            fi
+            if [[ '${{ parameters.testOrderId }}' == '00000000-0000-0000-0000-000000000000' ]]; then
+              echo 'ERROR: Provide an owned chef-specific order UUID when runAuthenticatedSmoke=true.' >&2
+              exit 1
+            fi
+            export RG='${{ parameters.resourceGroupName }}'
+            export APIM='${{ parameters.apimName }}'
+            export ORDER_APP='${{ parameters.orderContainerAppName }}'
+            export API_ID='${{ parameters.apiId }}'
+            export TEST_ORDER_ID='${{ parameters.testOrderId }}'
+            bash scripts/apim/verify-order-delivery-status-apim.sh
+        env:
+          CRAVES_ACCESS_TOKEN: $(CRAVES_CUSTOMER_TEST_TOKEN)

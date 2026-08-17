@@ -1,0 +1,76 @@
+trigger: none
+pr: none
+
+schedules:
+  - cron: "0 */6 * * *"
+    displayName: Every 6 hours production stabilization verification
+    branches:
+      include:
+        - main
+    always: true
+
+variables:
+  subscriptionId: 4f897b61-9b52-44b4-8cf1-bdac281cc1aa
+  resourceGroup: rg-craves-prodlow-centralindia
+  containerAppEnvironmentName: cae-craves-prodlow-l3ing6
+  customerWebAppName: ca-craves-web-prodlow
+  customerWebAppFqdn: ca-craves-web-prodlow.happysand-aedc7165.centralindia.azurecontainerapps.io
+  customerWebStaticIp: 4.187.245.188
+  customerWebCertificateName: craves-web-tls
+  keyVaultName: kvcravesprodlowl3ing6
+  customerApexHostname: craves.in
+  customerWwwHostname: www.craves.in
+  customerDomainVerificationId: 8CBF8092F604318F13145F6181237B80D12FD1336F3F37C199AA8D7099FF5DF1
+  apimHostname: api.craves.in
+  rollbackWwwHostname: lemon-bay-06f924610.7.azurestaticapps.net
+  certMinRemainingDays: 30
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    fetchDepth: 1
+
+  - bash: |
+      set -euo pipefail
+      packages=()
+      command -v dig >/dev/null 2>&1 || packages+=(dnsutils)
+      command -v shellcheck >/dev/null 2>&1 || packages+=(shellcheck)
+      if [[ ${#packages[@]} -gt 0 ]]; then
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends "${packages[@]}"
+      fi
+
+      bash -n infra/operations/production-stabilization/check-production.sh
+      shellcheck infra/operations/production-stabilization/check-production.sh
+    displayName: Validate stabilization script
+
+  - task: AzureCLI@2
+    displayName: Verify Craves production stabilization state
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      addSpnToEnvironment: false
+      inlineScript: |
+        set -Eeuo pipefail
+        set +x
+
+        export SUBSCRIPTION_ID='$(subscriptionId)'
+        export RESOURCE_GROUP='$(resourceGroup)'
+        export CONTAINER_APP_ENVIRONMENT_NAME='$(containerAppEnvironmentName)'
+        export CUSTOMER_WEB_APP_NAME='$(customerWebAppName)'
+        export CUSTOMER_WEB_APP_FQDN='$(customerWebAppFqdn)'
+        export CUSTOMER_WEB_STATIC_IP='$(customerWebStaticIp)'
+        export CUSTOMER_WEB_CERTIFICATE_NAME='$(customerWebCertificateName)'
+        export KEY_VAULT_NAME='$(keyVaultName)'
+        export CUSTOMER_APEX_HOSTNAME='$(customerApexHostname)'
+        export CUSTOMER_WWW_HOSTNAME='$(customerWwwHostname)'
+        export CUSTOMER_DOMAIN_VERIFICATION_ID='$(customerDomainVerificationId)'
+        export APIM_HOSTNAME='$(apimHostname)'
+        export ROLLBACK_WWW_HOSTNAME='$(rollbackWwwHostname)'
+        export CERT_MIN_REMAINING_DAYS='$(certMinRemainingDays)'
+
+        bash infra/operations/production-stabilization/check-production.sh

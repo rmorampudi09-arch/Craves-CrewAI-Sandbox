@@ -1,0 +1,70 @@
+domain consistency and retry only when safe.')]} 
+    return m.get(d,m['platform'])
+
+def evidence(d): return E.get(d,E['platform'])[2]
+def checklist(d):
+    base=['Confirm the intended actor and environment.','Confirm the current authoritative state before changing anything.','Capture HTTP status, stable error code and request/correlation ID without secrets.','Validate the owning component health and required dependency/configuration.','After the action, reload the state from the backend and confirm the expected result.']
+    if d=='devops': base+=['Confirm the deployed artifact/revision and readiness.','If rollback is used, verify the previous revision is healthy before closing the change.']
+    if d in ('security','admin'): base+=['Confirm least privilege and audit evidence for the sensitive action.']
+    return base
+
+def cover(c,spec):
+    rel,title,subtitle,kind,default=spec; hf(c,title,kind,1); bg,fg,sub=pal(kind); y=H-170; c.setFillColor(fg); c.setFont(BOLD,28)
+    for ln in wrap(title,34): c.drawString(42,y,ln); y-=34
+    c.setFillColor(sub); c.setFont(FONT,11.5)
+    for ln in wrap(subtitle,70): c.drawString(42,y,ln); y-=17
+    logo(c,W/2-50,y-115,100); y-=142
+    y=sec(c,'Summary',y,kind); y=para(c,'This document explains the subject in straightforward professional English, then adds the engineering detail needed to build, operate, troubleshoot or review it. Claims are based on the repository evidence snapshot; missing source details are called out instead of guessed.',42,y,kind,n=88,size=8.5,lead=11)
+    y-=7; y=sec(c,'Document details',y,kind); para(c,f'Edition 2.0 | Evidence date: {DATE} | Repository: {REPO} | Product evidence snapshot: main @ {SNAPSHOT}',42,y,kind,n=90,size=7.7,lead=10)
+
+def summary_page(c,spec,p=2):
+    rel,title,subtitle,kind,default=spec; hf(c,title,kind,p); y=heading(c,'Summary and how to use this document',H-98,kind)
+    y=para(c,f'{subtitle} The purpose is to make the system understandable to a new team member while still giving engineers enough detail to trace ownership, data flow, deployment impact and failure handling.',42,y-5,kind,n=88,size=8.6,lead=11)
+    box(c,'Current implementation','Direct code, README, migration, pipeline or commit evidence exists on the reviewed main snapshot.',42,y-18,245,70,kind,GREEN); box(c,'Foundation / partial','Useful groundwork exists, but the repository does not prove a complete production runtime for every part.',308,y-18,245,70,kind,AMBER)
+    y-=105; box(c,'Legacy / reference','Older implementation is retained for history or compatibility and is not treated as the preferred runtime.',42,y,245,70,kind,MUTED); box(c,'Needs source confirmation','A referenced artifact or exact value could not be verified and is therefore not invented.',308,y,245,70,kind,AMBER)
+    y-=105; y=sec(c,'Reading order',y,kind); bullets(c,['Start with the summary to understand the responsibility in normal language.','Use process diagrams to follow requests across client, APIM, services, data and providers.','Use the troubleshooting sections to diagnose by evidence rather than by retrying blindly.','Use deployment and validation sections before or after changing a component.','Use evidence status to separate proven behavior from gaps and future work.'],y,kind)
+
+def heading(c,text,y,kind,size=18.5):
+    _,fg,_=pal(kind); c.setFillColor(fg); c.setFont(BOLD,size)
+    for ln in wrap(text,56): c.drawString(42,y,ln); y-=size+3
+    return y
+
+def arch_page(c,spec,p=3):
+    rel,title,subtitle,kind,default=spec; hf(c,title,kind,p); y=heading(c,'How the request moves through Craves',H-98,kind); y=para(c,'The exact components depend on the feature, but the normal pattern is consistent. The user interface starts the request, the gateway and owning service enforce trust, the service writes authoritative state, and provider integrations remain behind controlled boundaries.',42,y-4,kind,n=88,size=8.5,lead=11); y-=14; y=draw_flow(c,['Customer / Chef / Admin','Web BFF or Mobile client','Azure API Management','Owning Spring Boot service','PostgreSQL / approved provider'],y,kind); y=sec(c,'Key rule',y,kind); para(c,'A screen can hide or show an action for usability, but that is not security. APIM and the owning backend still validate the caller, role, ownership and current business state. Likewise, provider success is not accepted as Craves state until the backend verifies and records the result.',42,y,kind,n=88,size=8.2,lead=10.7)
+
+def topic_page(c,spec,p,topic,aspect):
+    rel,title,subtitle,kind,default=spec; hf(c,title,kind,p); d=domain(topic+' '+aspect,default); st,col,note=status(topic,d); y=heading(c,f'{simple_name(topic)} - {aspect}',H-98,kind); c.setFillColor(col); c.roundRect(42,y-5,140,18,9,fill=1,stroke=0); c.setFillColor(WHITE); c.setFont(BOLD,7); c.drawCentredString(112,y+1,st); y-=28
+    y=sec(c,'Summary',y,kind); y=para(c,explanation(topic,d),42,y,kind,n=88,size=8.15,lead=10.4,maxlines=9); y-=4
+    y=sec(c,'Technical explanation',y,kind); y=para(c,technical(topic,d),42,y,kind,n=88,size=7.9,lead=10.1,maxlines=10); y-=4
+    y=sec(c,'Process flow',y,kind); y=draw_flow(c,flow(topic,d),y,kind); y=sec(c,'Common issues and resolution',y,kind)
+    rows=problems(d)[:2];
+    for issue,cause,action in rows: y=para(c,f'{issue}: {cause}. Resolution: {action}',42,y,kind,n=88,size=7.6,lead=9.6,maxlines=4); y-=3
+    y=sec(c,'Validation and evidence',y,kind); para(c,f'{note} Evidence: {evidence(d)}. Validate using authoritative state, health/readiness where relevant, and request/correlation evidence. Never paste credentials, OTPs, tokens or provider secrets into tickets or documentation.',42,y,kind,n=88,size=7.55,lead=9.5,maxlines=7)
+
+def regular_topics(default):
+    a=ANCHORS.get(default,ANCHORS['platform']); aspects=['Overview and responsibility','Functional behavior and data','Operations, errors and deployment']; out=[]
+    for t in a:
+        for asp in aspects: out.append((t,asp))
+    i=0
+    while len(out)<52: out.append((a[i%len(a)],'Security, evidence and change impact')); i+=1
+    return out[:52]
+
+def closing(c,spec,p):
+    rel,title,subtitle,kind,default=spec; hf(c,title,kind,p); y=heading(c,'Operational checklist and documented gaps',H-98,kind); y=sec(c,'Before making a change',y,kind); y=bullets(c,checklist(default),y,kind,maxitems=7); y=sec(c,'Repository gaps that must stay visible',y,kind); y=bullets(c,GAPS,y,kind,n=82,maxitems=5); y=sec(c,'Definition of done',y,kind); para(c,'A change is complete only when the intended behavior works, authorization still fails closed, authoritative data is correct, health/readiness are good, monitoring or correlation evidence is available, the rollback path remains valid, and the documentation has been updated if the contract or operating procedure changed.',42,y,kind,n=88,size=8.1,lead=10.5)
+
+def build_regular(spec):
+    rel,title,subtitle,kind,default=spec; path=OUT/rel; path.parent.mkdir(parents=True,exist_ok=True); c=canvas.Canvas(str(path),pagesize=A4,pageCompression=1,title=title,author='Craves Documentation'); cover(c,spec); c.showPage(); summary_page(c,spec,2); c.showPage(); arch_page(c,spec,3); c.showPage(); p=4
+    for t,a in regular_topics(default): topic_page(c,spec,p,t,a); c.showPage(); p+=1
+    closing(c,spec,p); c.save()
+
+API=[
+('GET','/actuator/health','Service health','Service-specific','Used by engineers and deployment validation to confirm the application is running.'),
+('GET','/api/v1/customer/profile','Read customer profile','USER','Returns the authenticated customer profile.'),('PUT','/api/v1/customer/profile','Update customer profile','USER','Updates supported customer profile fields.'),
+('GET','/api/v1/customer/addresses','List saved addresses','USER','Returns active saved delivery addresses owned by the customer.'),('POST','/api/v1/customer/addresses','Create saved address','USER','Requires recipient, address, area, city/state/postal code and valid coordinates.'),('PUT','/api/v1/customer/addresses/{addressId}','Update saved address','USER / owner','Updates an owned active address and maintains default-address rules.'),('DELETE','/api/v1/customer/addresses/{addressId}','Remove saved address','USER / owner','Soft deletes the address and promotes another default when needed.'),('GET','/api/v1/customer/addresses/recommendation','Recommend saved address from GPS','USER','Returns SAVED_ADDRESS when a nearby saved address matches; otherwise LIVE_GPS.'),('GET','/internal/v1/customer-addresses/{addressId}?identityId={identityId}','Internal checkout address lookup','Internal service','Validates active address ownership for Order Service. Uses a service credential, never a client credential.'),
+('GET','/api/v1/chef/application','Read chef application','Authenticated user','Returns current chef application state.'),('POST','/api/v1/chef/application','Submit chef application','Authenticated user','Creates or updates chef onboarding information.'),('POST','/api/v1/chef/application/proof-files','Upload chef proof files','Authenticated user','Uploads KYC/proof files through the documented storage boundary.'),('GET','/api/v1/backoffice/chef-reviews?status=PENDING','List chef reviews','ADMIN','Backoffice review queue.'),('POST','/api/v1/backoffice/chef-reviews/{applicationId}/approve','Approve chef','ADMIN','Approves eligible application and changes protected chef state.'),('POST','/api/v1/backoffice/chef-reviews/{applicationId}/reject','Reject chef','ADMIN','Rejects an application using the protected review flow.'),
+('GET','/api/v1/discovery/kitchens','Nearby kitchens','Customer','Requires latitude, longitude, radiusMeters; PostGIS orders eligible kitchens by distance.'),('GET','/api/v1/discovery/menu-items','Nearby menu items','Customer','Returns sellable nearby items with kitchen, package and primary-image metadata.'),('GET','/api/v1/catalog/kitchens','Public kitchen catalog','Customer','Compatibility route for existing clients.'),('GET','/api/v1/catalog/kitchens/{kitchenId}/menu-items','Kitchen menu','Customer','Returns menu items for a selected kitchen.'),('GET','/api/v1/kitchens/me','Read own kitchen','CHEF','Returns the approved chef’s kitchen profile.'),('PUT','/api/v1/kitchens/me','Update own kitchen','CHEF','Creates/updates the chef-owned kitchen profile.'),('GET','/api/v1/kitchens/me/menu-items','List own menu items','CHEF','Returns menu items owned by the chef kitchen.'),('POST','/api/v1/kitchens/me/menu-items','Create menu item','CHEF','Requires sellable details including package weight and thermobox decision.'),('PATCH','/api/v1/kitchens/me/menu-items/{menuItemId}/availability','Change availability','CHEF / owner','Changes only an owned menu item.'),
+('GET','/api/v1/cart','Read cart','USER','Returns backend-authoritative cart state.'),('POST','/api/v1/cart/items','Add cart item','USER','Adds a valid sellable catalog item.'),('PUT','/api/v1/cart/items/{cartItemId}','Change cart quantity','USER / owner','Updates quantity after validation.'),('DELETE','/api/v1/cart/items/{cartItemId}','Remove cart item','USER / owner','Removes one cart item.'),('POST','/api/v1/cart/validate','Validate cart','USER','Re-checks current catalog state before checkout.'),('POST','/api/v1/checkout','Create checkout','USER','Requires saved deliveryAddressId; creates immutable drop-off/pickup and item/package snapshots.'),('GET','/api/v1/checkout/{checkoutId}','Read checkout','USER / owner','Returns an owned checkout.'),('GET','/api/v1/orders','List customer orders','USER','Returns customer-owned orders.'),('GET','/api/v1/orders/{orderId}','Read order','USER / owner','Returns one owned order.'),('GET','/api/v1/chef/orders','List chef orders','CHEF','Returns chef-owned order work.'),('POST','/api/v1/chef/orders/{orderId}/accept','Accept chef order','CHEF / owner','Requires positive prepTimeMinutes and persists ready_at.'),('POST','/api/v1/chef/orders/{orderId}/ready-for-pickup','Mark ready for pickup','CHEF / owner','Moves an eligible accepted order to the ready state.'),('GET','/api/v1/admin/charge-policy/current','Read current charge policy','ADMIN','Reads the active order charge policy.'),('POST','/api/v1/admin/charge-policy','Create charge policy','ADMIN','Protected finance/operations configuration; current seeded V1 fees are zero unless changed.'),
+('GET','/api/v1/subscriptions/plans','List subscription plans','Authenticated customer','Lists available plan foundations.'),('POST','/api/v1/subscriptions','Create subscription','USER','Creates a customer subscription subject to current lifecycle rules.'),('GET','/api/v1/subscriptions','List subscriptions','USER','Returns customer subscriptions.'),('PATCH','/api/v1/subscriptions/{subscriptionId}/pause','Pause subscription','USER / owner','Applies supported pause transition.'),('PATCH','/api/v1/subscriptions/{subscriptionId}/cancel','Cancel subscription','USER / owner','Applies supported cancellation transition.'),
+('POST','/internal/v1/notifications','Create notification','Internal service','Creates an audited notification request; external channels can remain PENDING until provider adapters are enabled.'),('GET','/api/v1/notifications/in-app','In-app inbox','Authenticated identity','Current foundation requires trusted resolved identity; public exposure must stay behind gateway JWT/identity injection.'),
+('POST','/internal/v1/delivery-intelligence/providers','Register delivery provider','Internal service','Registers provider capabilities without fabricating rider data.'),('POST','/internal/v1/delivery-intelligence/assignments','Rank delivery candidates','Internal service','Idempotent by chefSubOrderId; retries return the persisted decision.'),('POST','/internal/v1/delivery-intelligence/outcomes','Record delivery outcome','Internal service','Idempotent by deliveryId and updates delivery intelligence state once.'),
+('POST','/auth/firebase/exchange','Exchange Firebase identity','Browser BFF / Auth','Current web sign-in contract; BFF keeps Craves tokens in secure HTTP-only cookies.'),('GET','/auth/me','Read current sessi

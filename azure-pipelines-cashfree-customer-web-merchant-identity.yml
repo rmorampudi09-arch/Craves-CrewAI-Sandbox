@@ -1,0 +1,83 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: publicSupportPhone
+    type: string
+    default: replace-before-run
+  - name: registeredBusinessName
+    type: string
+    default: replace-before-run
+  - name: confirmPublicMerchantIdentity
+    type: boolean
+    default: false
+
+variables:
+  resourceGroup: rg-craves-prodlow-centralindia
+  containerApp: ca-craves-web-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+
+  - ${{ if eq(parameters.confirmPublicMerchantIdentity, true) }}:
+    - task: AzureCLI@2
+      displayName: Configure and verify public Craves merchant identity
+      env:
+        CRAVES_PUBLIC_SUPPORT_PHONE_INPUT: ${{ parameters.publicSupportPhone }}
+        CRAVES_REGISTERED_BUSINESS_NAME_INPUT: ${{ parameters.registeredBusinessName }}
+      inputs:
+        azureSubscription: 'Craves-Dev-Service-Connection'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          RG='$(resourceGroup)'
+          APP='$(containerApp)'
+          PHONE="${CRAVES_PUBLIC_SUPPORT_PHONE_INPUT:-}"
+          BUSINESS="${CRAVES_REGISTERED_BUSINESS_NAME_INPUT:-}"
+
+          [[ "$PHONE" != 'replace-before-run' && -n "${PHONE// /}" ]] || { echo 'Enter the real public support/business phone number.' >&2; exit 2; }
+          [[ "$BUSINESS" != 'replace-before-run' && ${#BUSINESS} -ge 2 ]] || { echo 'Enter the registered Cashfree merchant/business name exactly as approved.' >&2; exit 2; }
+          DIGITS="$(tr -cd '0-9' <<<"$PHONE")"
+          [[ ${#DIGITS} -ge 10 && ${#DIGITS} -le 13 ]] || { echo 'Public support phone does not look valid.' >&2; exit 2; }
+
+          BEFORE="$(az containerapp show -g "$RG" -n "$APP" -o json)"
+          IMAGE="$(jq -r '.properties.template.containers[0].image // ""' <<<"$BEFORE")"
+          [[ -n "$IMAGE" ]] || { echo 'Customer web image is unavailable.' >&2; exit 2; }
+
+          az containerapp update -g "$RG" -n "$APP" \
+            --set-env-vars \
+              CRAVES_PUBLIC_SUPPORT_PHONE="$PHONE" \
+              CRAVES_REGISTERED_BUSINESS_NAME="$BUSINESS" >/dev/null
+
+          LATEST="$(az containerapp show -g "$RG" -n "$APP" --query properties.latestRevisionName -o tsv)"
+          READY=''; RUNNING=''
+          for _ in $(seq 1 60); do
+            SNAPSHOT="$(az containerapp show -g "$RG" -n "$APP" -o json)"
+            READY="$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$SNAPSHOT")"
+            RUNNING="$(jq -r '.properties.runningStatus // ""' <<<"$SNAPSHOT")"
+            [[ "$READY" == "$LATEST" && "$RUNNING" == 'Running' ]] && break
+            sleep 10
+          done
+          [[ "$READY" == "$LATEST" && "$RUNNING" == 'Running' ]] || { echo 'Customer web revision did not become ready.' >&2; exit 2; }
+
+          FQDN="$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv)"
+          [[ -n "$FQDN" ]] || { echo 'Customer web ingress FQDN is unavailable.' >&2; exit 2; }
+          READINESS="$(curl -fsS --connect-timeout 10 --max-time 30 "https://${FQDN}/api/readiness/cashfree")"
+          [[ "$(jq -r '.merchantIdentity.publicSupportPhoneConfigured' <<<"$READINESS")" == 'true' ]] || { echo 'Customer web did not read the public support phone.' >&2; exit 2; }
+          [[ "$(jq -r '.merchantIdentity.registeredBusinessNameConfigured' <<<"$READINESS")" == 'true' ]] || { echo 'Customer web did not read the registered business name.' >&2; exit 2; }
+
+          CONTACT="$(curl -fsS --connect-timeout 10 --max-time 30 "https://${FQDN}/contact")"
+          grep -Fq "$PHONE" <<<"$CONTACT" || { echo 'Public support phone is not visible on Contact Us.' >&2; exit 2; }
+          grep -Fq "$BUSINESS" <<<"$CONTACT" || { echo 'Registered merchant/business name is not visible on Contact Us.' >&2; exit 2; }
+
+          echo "SUCCESS: public Cashfree merchant identity is configured on customer web revision $LATEST."
+
+  - ${{ if ne(parameters.confirmPublicMerchantIdentity, true) }}:
+    - bash: |
+        echo 'confirmPublicMerchantIdentity must be true.' >&2
+        exit 2
+      displayName: Block unconfirmed public merchant identity change

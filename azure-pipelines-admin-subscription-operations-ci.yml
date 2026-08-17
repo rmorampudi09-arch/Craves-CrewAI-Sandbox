@@ -1,0 +1,32 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test admin subscription operations
+  - script: |
+      set -euo pipefail
+      grep -q 'isSameOrigin' apps/customer-web-next/src/app/api/admin/subscriptions/\[subscriptionId\]/status/route.ts
+      grep -q 'reason' apps/customer-web-next/src/lib/admin-subscription-operation-contract.ts
+      if grep -REn '(customerIdentityId|chefIdentityId|localStorage|sessionStorage|console\.(log|debug)|refund|credit|payout)' \
+        apps/customer-web-next/src/components/admin-subscription-operator.tsx \
+        apps/customer-web-next/src/app/admin/subscriptions \
+        apps/customer-web-next/src/app/api/admin/subscriptions; then
+        echo 'ERROR: Admin subscription runtime exposes internal identities, insecure storage/logging or unsupported finance actions.' >&2
+        exit 1
+      fi
+      echo 'Admin subscription operation gates passed.'
+    displayName: Verify controlled subscription operations

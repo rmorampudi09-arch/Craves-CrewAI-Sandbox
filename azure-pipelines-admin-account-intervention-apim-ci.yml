@@ -1,0 +1,37 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-admin-account-intervention-apim.sh
+      bash -n scripts/apim/status-admin-account-intervention-apim.sh
+      bash -n scripts/apim/rollback-admin-account-intervention-apim.sh
+      POLICY='infra/apim/admin-account-intervention/authenticated-policy.xml'
+      CONFIG='scripts/apim/configure-admin-account-intervention-apim.sh'
+      STATUS='scripts/apim/status-admin-account-intervention-apim.sh'
+      python3 - "$POLICY" <<'PY'
+      import sys
+      import xml.etree.ElementTree as ET
+      ET.parse(sys.argv[1])
+      print('APIM policy XML is well formed.')
+      PY
+      grep -q 'CONFIRM_APIM_WRITE' "$CONFIG"
+      grep -q 'post-admin-account-suspend' "$CONFIG"
+      grep -q 'post-admin-account-reactivate' "$CONFIG"
+      grep -q 'EXPECTED_METHOD' "$CONFIG"
+      grep -q 'EXPECTED_TEMPLATE' "$CONFIG"
+      grep -q 'urlTemplate' "$STATUS"
+      grep -q 'set-backend-service base-url=' "$POLICY"
+      grep -q 'Bearer' "$POLICY"
+      grep -q 'no-store' "$POLICY"
+      if grep -En 'set-backend-service[[:space:]]+backend-id=|set-header name="Authorization"' "$POLICY"; then
+        echo 'ERROR: Unsafe APIM policy behavior detected.' >&2
+        exit 1
+      fi
+      echo 'Admin account intervention APIM static gates passed.'
+    displayName: Verify APIM safety, XML and script syntax

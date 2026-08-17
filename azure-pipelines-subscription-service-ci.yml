@@ -1,0 +1,53 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/subscription-service
+      mvn -B -ntp clean verify
+    displayName: Maven clean verify
+
+  - bash: |
+      set -euo pipefail
+
+      APP_YML='services/subscription-service/src/main/resources/application.yml'
+      MIGRATIONS='services/subscription-service/src/main/resources/db/migration'
+
+      grep -Fq 'baseline-on-migrate: true' "$APP_YML"
+      grep -Fq 'baseline-version: 0' "$APP_YML"
+
+      test -f "$MIGRATIONS/V1__subscription_core.sql"
+      test -f "$MIGRATIONS/V1_1__subscription_core_baseline_repair.sql"
+      test -f "$MIGRATIONS/V2__subscription_plan_audit.sql"
+      test -f "$MIGRATIONS/V15__paid_capacity_conflict_incident.sql"
+
+      grep -Fq 'CREATE SCHEMA IF NOT EXISTS subscription_schema' \
+        "$MIGRATIONS/V1__subscription_core.sql"
+      grep -Fq 'CREATE SCHEMA IF NOT EXISTS subscription_schema' \
+        "$MIGRATIONS/V1_1__subscription_core_baseline_repair.sql"
+      grep -Fq 'CREATE TABLE IF NOT EXISTS subscription_schema.subscription_plan' \
+        "$MIGRATIONS/V1_1__subscription_core_baseline_repair.sql"
+
+      if grep -RInE '(^|[^A-Za-z])(DROP[[:space:]]+SCHEMA|DROP[[:space:]]+DATABASE|TRUNCATE)[[:space:]]' \
+        "$MIGRATIONS/V1_1__subscription_core_baseline_repair.sql"; then
+        echo 'Unsafe destructive SQL found in Flyway bootstrap repair.' >&2
+        exit 1
+      fi
+
+      echo 'Subscription pre-deployment source gate: PASS'
+    displayName: Verify Flyway bootstrap safety

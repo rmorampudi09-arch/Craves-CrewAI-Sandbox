@@ -1,0 +1,27 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/mobile/customer-app
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test mobile customer orders
+  - script: |
+      set -euo pipefail
+      grep -q 'Authorization' apps/mobile/customer-app/src/orders/orders-api.ts
+      grep -q "navigation.navigate('DeliveryTracking'" apps/mobile/customer-app/src/screens/OrderDetailsScreen.tsx
+      if grep -REn '(customerIdentityId|pickupAddress|providerPayload)' apps/mobile/customer-app/src/screens/OrdersScreen.tsx apps/mobile/customer-app/src/screens/OrderDetailsScreen.tsx; then
+        echo 'ERROR: Mobile order UI references private fields.' >&2
+        exit 1
+      fi
+      echo 'Mobile order ownership and privacy controls passed.'
+    displayName: Verify mobile order safety

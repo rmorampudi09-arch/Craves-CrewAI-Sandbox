@@ -1,0 +1,42 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmApimWrite
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    displayName: Azure resource group
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimServiceName
+    displayName: API Management service
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: authContainerAppName
+    displayName: Auth Service Container App
+    type: string
+    default: ca-craves-auth-service-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: AzureCLI@2
+    displayName: Configure internal administrator RBAC APIM
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        if [[ '${{ parameters.confirmApimWrite }}' != 'True' && '${{ parameters.confirmApimWrite }}' != 'true' ]]; then
+          echo 'ERROR: confirmApimWrite must be enabled.' >&2
+          exit 1
+        fi
+        CONFIRM_APIM_WRITE=true bash scripts/apim/configure-internal-admin-rbac-apim.sh
+    env:
+      RG: ${{ parameters.resourceGroupName }}
+      APIM: ${{ parameters.apimServiceName }}
+      AUTH_APP: ${{ parameters.authContainerAppName }}

@@ -1,0 +1,187 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: containerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: serviceBusNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+  - name: serviceBusFullyQualifiedNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6.servicebus.windows.net
+  - name: topicName
+    type: string
+    default: craves-domain-events
+  - name: subscriptionName
+    type: string
+    default: order-service-refund-status-changed
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: AzureCLI@2
+    displayName: Prepare and enable REFUND_STATUS_CHANGED consumer
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.containerAppName }}'
+        NS='${{ parameters.serviceBusNamespace }}'
+        FQNS='${{ parameters.serviceBusFullyQualifiedNamespace }}'
+        TOPIC='${{ parameters.topicName }}'
+        SUB='${{ parameters.subscriptionName }}'
+        RULE='refund-status-changed-only'
+
+        if [[ "$FQNS" != "$NS.servicebus.windows.net" ]]; then
+          echo "ERROR: Fully-qualified namespace must be $NS.servicebus.windows.net"
+          exit 1
+        fi
+
+        PRINCIPAL_ID=$(az containerapp show \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --query identity.principalId \
+          -o tsv)
+
+        if [[ -z "$PRINCIPAL_ID" || "$PRINCIPAL_ID" == "null" ]]; then
+          echo "ERROR: Order Container App does not have a system-assigned managed identity."
+          exit 1
+        fi
+
+        az servicebus topic show \
+          --resource-group "$RG" \
+          --namespace-name "$NS" \
+          --name "$TOPIC" \
+          -o none
+
+        if ! az servicebus topic subscription show \
+          --resource-group "$RG" \
+          --namespace-name "$NS" \
+          --topic-name "$TOPIC" \
+          --name "$SUB" \
+          -o none 2>/dev/null; then
+          az servicebus topic subscription create \
+            --resource-group "$RG" \
+            --namespace-name "$NS" \
+            --topic-name "$TOPIC" \
+            --name "$SUB" \
+            --max-delivery-count 10 \
+            --lock-duration PT1M \
+            -o none
+        fi
+
+        az servicebus topic subscription rule delete \
+          --resource-group "$RG" \
+          --namespace-name "$NS" \
+          --topic-name "$TOPIC" \
+          --subscription-name "$SUB" \
+          --name '$Default' \
+          -o none 2>/dev/null || true
+
+        if ! az servicebus topic subscription rule show \
+          --resource-group "$RG" \
+          --namespace-name "$NS" \
+          --topic-name "$TOPIC" \
+          --subscription-name "$SUB" \
+          --name "$RULE" \
+          -o none 2>/dev/null; then
+          az servicebus topic subscription rule create \
+            --resource-group "$RG" \
+            --namespace-name "$NS" \
+            --topic-name "$TOPIC" \
+            --subscription-name "$SUB" \
+            --name "$RULE" \
+            --filter-sql-expression "eventType = 'REFUND_STATUS_CHANGED'" \
+            -o none
+        fi
+
+        SUBSCRIPTION_SCOPE=$(az servicebus topic subscription show \
+          --resource-group "$RG" \
+          --namespace-name "$NS" \
+          --topic-name "$TOPIC" \
+          --name "$SUB" \
+          --query id \
+          -o tsv)
+
+        NAMESPACE_SCOPE=$(az servicebus namespace show \
+          --resource-group "$RG" \
+          --name "$NS" \
+          --query id \
+          -o tsv)
+
+        RECEIVER_COUNT=$(az role assignment list \
+          --assignee-object-id "$PRINCIPAL_ID" \
+          --all \
+          --query "[?roleDefinitionName=='Azure Service Bus Data Receiver' && (scope=='$SUBSCRIPTION_SCOPE' || scope=='$NAMESPACE_SCOPE')] | length(@)" \
+          -o tsv)
+
+        if [[ "${RECEIVER_COUNT:-0}" == "0" ]]; then
+          echo "ERROR: Order managed identity is missing Azure Service Bus Data Receiver."
+          echo "PRINCIPAL_ID=$PRINCIPAL_ID"
+          echo "SUBSCRIPTION_SCOPE=$SUBSCRIPTION_SCOPE"
+          echo "Grant the role once with an authorized Azure account, then rerun this pipeline."
+          exit 2
+        fi
+
+        PREVIOUS_LATEST=$(az containerapp show \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --query properties.latestRevisionName \
+          -o tsv)
+
+        az containerapp update \
+          --resource-group "$RG" \
+          --name "$APP" \
+          --set-env-vars \
+            CRAVES_REFUND_STATUS_CONSUMER_ENABLED=true \
+            CRAVES_REFUND_STATUS_SUBSCRIPTION="$SUB" \
+            CRAVES_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE="$FQNS" \
+            CRAVES_DOMAIN_EVENTS_TOPIC_NAME="$TOPIC" \
+            CRAVES_CHEF_ACCEPTANCE_WORKER_ENABLED=false \
+            CRAVES_DOMAIN_EVENT_ENABLED_TYPES=CHEF_ACCEPTED_ORDER \
+          -o none
+
+        echo "Waiting for a healthy Order revision with refund status consumption enabled..."
+        for ATTEMPT in $(seq 1 60); do
+          LATEST=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.latestRevisionName -o tsv)
+          READY=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.latestReadyRevisionName -o tsv)
+          RUNNING=$(az containerapp show --resource-group "$RG" --name "$APP" --query properties.runningStatus -o tsv)
+          HEALTH=$(az containerapp revision show \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --revision "$LATEST" \
+            --query properties.healthState \
+            -o tsv 2>/dev/null || true)
+
+          echo "Attempt $ATTEMPT/60: latest=$LATEST ready=$READY health=$HEALTH running=$RUNNING"
+
+          if [[ "$LATEST" != "$PREVIOUS_LATEST" \
+                && "$LATEST" == "$READY" \
+                && "$HEALTH" == "Healthy" \
+                && "$RUNNING" == "Running" ]]; then
+            echo "SUCCESS: Refund status consumer enabled. Timeout and REFUND_REQUESTED publishing remain disabled."
+            az containerapp show \
+              --resource-group "$RG" \
+              --name "$APP" \
+              --query "properties.template.containers[0].env[?starts_with(name, 'CRAVES_REFUND_STATUS_') || name=='CRAVES_CHEF_ACCEPTANCE_WORKER_ENABLED' || name=='CRAVES_DOMAIN_EVENT_ENABLED_TYPES'].{Name:name,Value:value,SecretRef:secretRef}" \
+              -o table
+            exit 0
+          fi
+
+          sleep 10
+        done
+
+        echo "ERROR: Refund status consumer revision did not become healthy within 10 minutes."
+        exit 1

@@ -1,0 +1,38 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/notification-service
+      mvn -B -ntp clean verify
+    displayName: Verify Notification Service recovery operations
+
+  - bash: |
+      set -euo pipefail
+      grep -F 'api-enabled: ${CRAVES_NOTIFICATION_RECOVERY_API_ENABLED:false}' \
+        services/notification-service/src/main/resources/application.yml
+      grep -F "Only FAILED or DEAD_LETTER notification requests may be requeued" \
+        services/notification-service/src/main/java/in/craves/notification/recovery/NotificationRecoveryRepository.java
+      grep -F "previous_attempt_count" \
+        services/notification-service/src/main/resources/db/migration/V4__notification_recovery_operations.sql
+      grep -F 'hasRole("ADMIN")' \
+        services/notification-service/src/main/java/in/craves/notification/recovery/AdminNotificationRecoveryController.java
+      if grep -R -E 'device_token|raw_payload|connection-string|service-account-json' \
+          services/notification-service/src/main/java/in/craves/notification/recovery; then
+        echo 'Recovery APIs must not expose device tokens, provider payloads or credentials.' >&2
+        exit 1
+      fi
+    displayName: Verify recovery safety and privacy

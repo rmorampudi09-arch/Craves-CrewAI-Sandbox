@@ -1,0 +1,39 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: containerAppName
+    type: string
+    default: ca-craves-web-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: AzureCLI@2
+    displayName: Read customer-web rollout status
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.containerAppName }}'
+        APP_JSON=$(az containerapp show -g "$RG" -n "$APP" -o json)
+        FQDN=$(jq -r '.properties.configuration.ingress.fqdn // ""' <<<"$APP_JSON")
+        jq '{
+          image: .properties.template.containers[0].image,
+          latest: .properties.latestRevisionName,
+          ready: .properties.latestReadyRevisionName,
+          running: .properties.runningStatus,
+          fqdn: .properties.configuration.ingress.fqdn,
+          apiBaseUrl: ([.properties.template.containers[0].env[]? | select(.name=="CRAVES_API_BASE_URL")][0].value // "")
+        }' <<<"$APP_JSON"
+        [[ -n "$FQDN" ]] || { echo 'ERROR: Customer web FQDN is missing.' >&2; exit 1; }
+        CODE=$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' "https://$FQDN/" || true)
+        echo "homeHttpStatus=$CODE"
+        [[ "$CODE" == "200" ]] || exit 1

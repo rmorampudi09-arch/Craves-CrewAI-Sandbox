@@ -1,0 +1,63 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmSyntheticValidation
+    displayName: 'I understand this creates and removes isolated synthetic Order records and publishes synthetic Service Bus events'
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: serviceBusNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+  - name: topicName
+    type: string
+    default: craves-domain-events
+  - name: orderSubscriptionName
+    type: string
+    default: order-service-delivery-status-changed
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - script: |
+      set -euo pipefail
+      bash -n scripts/release/validate-order-delivery-status-synthetic-consumer.sh
+      echo 'Synthetic delivery-status validator shell syntax: PASS'
+    displayName: Validate synthetic validator syntax
+
+  - ${{ if eq(parameters.confirmSyntheticValidation, false) }}:
+      - script: |
+          echo 'Synthetic execution guard remains CLOSED.'
+          echo 'No Azure resource, Service Bus message, database row or runtime setting was changed.'
+          echo 'Queue a new run and explicitly set confirmSyntheticValidation=true when ready.'
+        displayName: Confirmation required - no execution
+
+  - ${{ if eq(parameters.confirmSyntheticValidation, true) }}:
+      - task: AzureCLI@2
+        displayName: Run isolated DELIVERY_STATUS_CHANGED consumer validation
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+            set +x
+            bash scripts/release/validate-order-delivery-status-synthetic-consumer.sh \
+              '${{ parameters.resourceGroupName }}' \
+              '${{ parameters.orderContainerAppName }}' \
+              '${{ parameters.integrationContainerAppName }}' \
+              '${{ parameters.serviceBusNamespace }}' \
+              '${{ parameters.topicName }}' \
+              '${{ parameters.orderSubscriptionName }}'

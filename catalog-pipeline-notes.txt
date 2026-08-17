@@ -1,0 +1,1 @@
+Catalog service pipeline will build services/catalog-service and deploy image craves/catalog-service to ca-craves-catalog-service-prodlo.

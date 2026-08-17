@@ -1,0 +1,35 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/mobile/customer-app
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test mobile subscription plans
+  - script: |
+      set -euo pipefail
+      grep -q 'listSubscriptionPlans' apps/mobile/customer-app/src/screens/SubscriptionPlansScreen.tsx
+      if grep -REn '(customerIdentityId|chefIdentityId|AsyncStorage|console\.(log|debug))' \
+        apps/mobile/customer-app/src/subscriptions \
+        apps/mobile/customer-app/src/screens/SubscriptionPlansScreen.tsx \
+        apps/mobile/customer-app/src/screens/SubscriptionEnrollmentPendingScreen.tsx --exclude='*.test.ts'; then
+        echo 'ERROR: Mobile subscription plans expose internal identities, insecure storage or debug logging.' >&2
+        exit 1
+      fi
+      if grep -REn 'console\.(log|debug).*accessToken|accessToken.*console\.(log|debug)' apps/mobile/customer-app/src; then
+        echo 'ERROR: Mobile runtime logs an access token.' >&2
+        exit 1
+      fi
+      echo 'Mobile subscription plan privacy gates passed.'
+    displayName: Verify mobile subscription plan safety

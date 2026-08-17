@@ -1,0 +1,30 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Build and test chef menu
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-chef-menu-apim.sh
+      if grep -REn '(kitchenId|blobContainer|blobName|localStorage|sessionStorage|console\.(log|debug))' \
+        apps/customer-web-next/src/app/chef/menu \
+        apps/customer-web-next/src/app/api/chef/menu \
+        apps/customer-web-next/src/components/chef-menu-manager.tsx --exclude='*.test.ts'; then
+        echo 'ERROR: Chef menu runtime exposes internal identifiers/storage metadata or insecure behavior.' >&2
+        exit 1
+      fi
+      echo 'Chef menu privacy and APIM static gates passed.'
+    displayName: Verify chef menu safety gates

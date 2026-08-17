@@ -1,0 +1,104 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: craves-order-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/craves_business_db}
+    username: ${SPRING_DATASOURCE_USERNAME:cravesadmin}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE:5}
+      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MIN_IDLE:1}
+      connection-timeout: 30000
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    default-schema: order_schema
+    schemas: order_schema
+    table: flyway_schema_history
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+craves:
+  jwt:
+    issuer: ${CRAVES_JWT_ISSUER:https://api.craves.in/auth}
+    audience: ${CRAVES_JWT_AUDIENCE:craves-api}
+    verification-pem-base64: ${CRAVES_JWT_VERIFICATION_PEM_BASE64:}
+  catalog:
+    base-url: ${CRAVES_CATALOG_BASE_URL:https://api.craves.in/api/v1/catalog}
+  launch-policy:
+    enforcement-enabled: ${CRAVES_LAUNCH_POLICY_ENFORCEMENT_ENABLED:false}
+  notification:
+    base-url: ${CRAVES_NOTIFICATION_INTERNAL_BASE_URL:}
+    access-value: ${CRAVES_NOTIFICATION_INTERNAL_KEY:}
+    direct-dispatch-enabled: ${CRAVES_NOTIFICATION_DIRECT_DISPATCH_ENABLED:false}
+    outbox-dispatcher:
+      enabled: ${CRAVES_NOTIFICATION_OUTBOX_DISPATCHER_ENABLED:false}
+      fixed-delay-ms: ${CRAVES_NOTIFICATION_OUTBOX_DISPATCHER_FIXED_DELAY_MS:30000}
+      batch-size: ${CRAVES_NOTIFICATION_OUTBOX_DISPATCHER_BATCH_SIZE:25}
+      max-attempts: ${CRAVES_NOTIFICATION_OUTBOX_DISPATCHER_MAX_ATTEMPTS:5}
+      retry-base-delay-seconds: ${CRAVES_NOTIFICATION_OUTBOX_DISPATCHER_RETRY_BASE_DELAY_SECONDS:60}
+  chef-acceptance:
+    timeout-minutes: ${CRAVES_CHEF_ACCEPTANCE_TIMEOUT_MINUTES:30}
+    first-reminder-minutes: ${CRAVES_CHEF_ACCEPTANCE_FIRST_REMINDER_MINUTES:10}
+    second-reminder-minutes: ${CRAVES_CHEF_ACCEPTANCE_SECOND_REMINDER_MINUTES:20}
+    worker-enabled: ${CRAVES_CHEF_ACCEPTANCE_WORKER_ENABLED:false}
+    worker-fixed-delay-ms: ${CRAVES_CHEF_ACCEPTANCE_WORKER_FIXED_DELAY_MS:30000}
+    worker-batch-size: ${CRAVES_CHEF_ACCEPTANCE_WORKER_BATCH_SIZE:20}
+  refund-status-consumer:
+    enabled: ${CRAVES_REFUND_STATUS_CONSUMER_ENABLED:false}
+    fully-qualified-namespace: ${CRAVES_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE:}
+    connection-string: ${SERVICE_BUS_CONNECTION_STRING:}
+    topic-name: ${CRAVES_DOMAIN_EVENTS_TOPIC_NAME:craves-domain-events}
+    subscription-name: ${CRAVES_REFUND_STATUS_SUBSCRIPTION:order-service-refund-status-changed}
+    max-concurrent-messages: ${CRAVES_REFUND_STATUS_MAX_CONCURRENT_MESSAGES:2}
+    prefetch-count: ${CRAVES_REFUND_STATUS_PREFETCH_COUNT:4}
+    max-delivery-attempts: ${CRAVES_REFUND_STATUS_MAX_DELIVERY_ATTEMPTS:5}
+  delivery-status-consumer:
+    enabled: ${CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED:false}
+    fully-qualified-namespace: ${CRAVES_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE:}
+    connection-string: ${SERVICE_BUS_CONNECTION_STRING:}
+    topic-name: ${CRAVES_DOMAIN_EVENTS_TOPIC_NAME:craves-domain-events}
+    subscription-name: ${CRAVES_DELIVERY_STATUS_SUBSCRIPTION:order-service-delivery-status-changed}
+    max-concurrent-messages: ${CRAVES_DELIVERY_STATUS_MAX_CONCURRENT_MESSAGES:2}
+    prefetch-count: ${CRAVES_DELIVERY_STATUS_PREFETCH_COUNT:4}
+    max-delivery-attempts: ${CRAVES_DELIVERY_STATUS_MAX_DELIVERY_ATTEMPTS:5}
+  subscription-orders:
+    consumer-enabled: ${CRAVES_SUBSCRIPTION_ORDER_CONSUMER_ENABLED:false}
+    callback-worker-enabled: ${CRAVES_SUBSCRIPTION_ORDER_CALLBACK_WORKER_ENABLED:false}
+    fully-qualified-namespace: ${CRAVES_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE:}
+    connection-string: ${SERVICE_BUS_CONNECTION_STRING:}
+    topic-name: ${CRAVES_DOMAIN_EVENTS_TOPIC_NAME:craves-domain-events}
+    subscription-name: ${SERVICE_BUS_SUBSCRIPTION_ORDER_REQUESTED_SUBSCRIPTION:order-service-subscription-order-requested}
+    subscription-service-base-url: ${CRAVES_SUBSCRIPTION_INTERNAL_BASE_URL:}
+    internal-access-value: ${CRAVES_INTERNAL_SERVICE_SECRET:}
+    max-concurrent-messages: ${CRAVES_SUBSCRIPTION_ORDER_MAX_CONCURRENT_MESSAGES:2}
+    prefetch-count: ${CRAVES_SUBSCRIPTION_ORDER_PREFETCH_COUNT:4}
+    max-delivery-attempts: ${CRAVES_SUBSCRIPTION_ORDER_MAX_DELIVERY_ATTEMPTS:5}
+    callback-batch-size: ${CRAVES_SUBSCRIPTION_ORDER_CALLBACK_BATCH_SIZE:20}
+    callback-max-attempts: ${CRAVES_SUBSCRIPTION_ORDER_CALLBACK_MAX_ATTEMPTS:10}
+    callback-stale-minutes: ${CRAVES_SUBSCRIPTION_ORDER_CALLBACK_STALE_MINUTES:5}
+    callback-fixed-delay-ms: ${CRAVES_SUBSCRIPTION_ORDER_CALLBACK_FIXED_DELAY_MS:5000}
+  domain-events:
+    outbox:
+      enabled: ${CRAVES_DOMAIN_EVENT_OUTBOX_ENABLED:false}
+      enabled-event-types: ${CRAVES_DOMAIN_EVENT_ENABLED_TYPES:CHEF_ACCEPTED_ORDER}
+      fixed-delay-ms: ${CRAVES_DOMAIN_EVENT_OUTBOX_FIXED_DELAY_MS:5000}
+      batch-size: ${CRAVES_DOMAIN_EVENT_OUTBOX_BATCH_SIZE:20}
+      max-attempts: ${CRAVES_DOMAIN_EVENT_OUTBOX_MAX_ATTEMPTS:10}
+      retry-base-delay-seconds: ${CRAVES_DOMAIN_EVENT_OUTBOX_RETRY_BASE_DELAY_SECONDS:5}
+      stale-lock-seconds: ${CRAVES_DOMAIN_EVENT_OUTBOX_STALE_LOCK_SECONDS:300}
+    service-bus:
+      enabled: ${CRAVES_DOMAIN_EVENT_SERVICE_BUS_ENABLED:false}
+      fully-qualified-namespace: ${CRAVES_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE:}
+      topic-name: ${CRAVES_DOMAIN_EVENTS_TOPIC_NAME:craves-domain-events}

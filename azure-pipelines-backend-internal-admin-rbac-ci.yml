@@ -1,0 +1,38 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+  - task: JavaToolInstaller@0
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+    displayName: Use Java 21
+  - bash: |
+      set -euo pipefail
+      bash scripts/release/validate-internal-admin-rbac.sh
+      for service in \
+        services/auth-service \
+        services/user-chef-service \
+        services/order-service \
+        services/integration-service \
+        services/subscription-service \
+        services/notification-service; do
+        echo "========== MAVEN VERIFY $service =========="
+        (cd "$service" && mvn -B -ntp clean verify)
+      done
+    displayName: Validate RBAC contracts and affected services
+  - task: PublishTestResults@2
+    condition: always()
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: '**/target/surefire-reports/TEST-*.xml'
+      failTaskOnFailedTests: true
+      failTaskOnMissingResultsFile: false
+      testRunTitle: Craves internal administrator RBAC
+    displayName: Publish RBAC test results

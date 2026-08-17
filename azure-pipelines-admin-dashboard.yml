@@ -1,0 +1,173 @@
+trigger:
+  branches:
+    include: [main]
+  paths:
+    include:
+      - apps/customer-web-next/**
+      - services/order-service/**
+      - azure-pipelines-admin-dashboard.yml
+
+pr:
+  branches:
+    include: [main]
+  paths:
+    include:
+      - apps/customer-web-next/**
+      - services/order-service/**
+
+parameters:
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: acrName
+    type: string
+    default: cravesprodlowacr82121
+  - name: containerAppName
+    type: string
+    default: ca-craves-admin-web-prodlow
+  - name: imageTag
+    type: string
+    default: $(Build.BuildId)
+
+variables:
+  webPath: apps/customer-web-next
+  orderPath: services/order-service
+  imageRepository: craves/admin-web
+
+stages:
+  - stage: Validate
+    displayName: Validate admin application
+    jobs:
+      - job: WebAndBackend
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+            persistCredentials: false
+          - task: NodeTool@0
+            displayName: Use Node.js 24
+            inputs:
+              versionSpec: 24.x
+          - script: |
+              set -euo pipefail
+              cd $(webPath)
+              npm ci --ignore-scripts --no-audit --no-fund
+              npm run lint
+              npm run typecheck
+              npm run test
+              npm run build
+            displayName: Validate production Next.js application
+            env:
+              CRAVES_API_BASE_URL: $(CRAVES_API_BASE_URL)
+              NEXT_PUBLIC_FIREBASE_API_KEY: $(NEXT_PUBLIC_FIREBASE_API_KEY)
+              NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: $(NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)
+              NEXT_PUBLIC_FIREBASE_PROJECT_ID: $(NEXT_PUBLIC_FIREBASE_PROJECT_ID)
+              NEXT_PUBLIC_FIREBASE_APP_ID: $(NEXT_PUBLIC_FIREBASE_APP_ID)
+              NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: $(NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)
+              NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: $(NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)
+              NEXT_PUBLIC_CASHFREE_MODE: $(NEXT_PUBLIC_CASHFREE_MODE)
+              NEXT_PUBLIC_SYNCFUSION_LICENSE_KEY: $(NEXT_PUBLIC_SYNCFUSION_LICENSE_KEY)
+          - task: JavaToolInstaller@0
+            displayName: Use Java 21
+            inputs:
+              versionSpec: "21"
+              jdkArchitectureOption: x64
+              jdkSourceOption: PreInstalled
+          - script: |
+              set -euo pipefail
+              cd $(orderPath)
+              mvn -B -ntp -Dtest=AdminDashboardControllerTest test
+            displayName: Verify backend ADMIN role enforcement
+
+  - stage: Image
+    displayName: Build dedicated admin image
+    dependsOn: Validate
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: BuildAndPush
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+            persistCredentials: false
+          - task: AzureCLI@2
+            displayName: Build and push immutable admin image
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                set +x
+                ACR='${{ parameters.acrName }}'
+                TAG='${{ parameters.imageTag }}'
+                LOGIN_SERVER=$(az acr show --name "$ACR" --query loginServer -o tsv)
+                [[ -n "$LOGIN_SERVER" ]] || { echo 'ERROR: ACR login server was not resolved.' >&2; exit 1; }
+                IMAGE="$LOGIN_SERVER/$(imageRepository):$TAG"
+                az acr login --name "$ACR"
+                docker build --pull -f "$(webPath)/Dockerfile.admin" \
+                  --build-arg NEXT_PUBLIC_FIREBASE_API_KEY='$(NEXT_PUBLIC_FIREBASE_API_KEY)' \
+                  --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN='$(NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)' \
+                  --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID='$(NEXT_PUBLIC_FIREBASE_PROJECT_ID)' \
+                  --build-arg NEXT_PUBLIC_FIREBASE_APP_ID='$(NEXT_PUBLIC_FIREBASE_APP_ID)' \
+                  --build-arg NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID='$(NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)' \
+                  --build-arg NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET='$(NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)' \
+                  --build-arg NEXT_PUBLIC_CASHFREE_MODE='$(NEXT_PUBLIC_CASHFREE_MODE)' \
+                  --build-arg NEXT_PUBLIC_SYNCFUSION_LICENSE_KEY='$(NEXT_PUBLIC_SYNCFUSION_LICENSE_KEY)' \
+                  -t "$IMAGE" "$(webPath)"
+                docker push "$IMAGE"
+                echo "##vso[task.setvariable variable=ADMIN_IMAGE;isOutput=true]$IMAGE"
+            name: image
+
+  - stage: Deploy
+    displayName: Deploy admin Container App revision
+    dependsOn: Image
+    condition: succeeded()
+    variables:
+      ADMIN_IMAGE: $[ stageDependencies.Image.BuildAndPush.outputs['image.ADMIN_IMAGE'] ]
+    jobs:
+      - deployment: AdminContainerApp
+        environment: craves-admin-prodlow
+        pool:
+          vmImage: ubuntu-latest
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: none
+                - task: AzureCLI@2
+                  displayName: Update and verify existing admin Container App
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      RG='${{ parameters.resourceGroupName }}'
+                      APP='${{ parameters.containerAppName }}'
+                      IMAGE='$(ADMIN_IMAGE)'
+                      [[ "$IMAGE" == */$(imageRepository):* ]] || { echo 'ERROR: Immutable admin image was not resolved.' >&2; exit 1; }
+                      az containerapp show -g "$RG" -n "$APP" -o none || {
+                        echo 'ERROR: The separately billed admin Container App must be created and approved before deployment.' >&2
+                        exit 1
+                      }
+                      PREVIOUS_IMAGE=$(az containerapp show -g "$RG" -n "$APP" --query 'properties.template.containers[0].image' -o tsv)
+                      az containerapp update -g "$RG" -n "$APP" --image "$IMAGE" \
+                        --set-env-vars CRAVES_API_BASE_URL='$(CRAVES_API_BASE_URL)' CRAVES_ADMIN_PORTAL=true \
+                        --no-wait -o none
+                      for attempt in $(seq 1 60); do
+                        JSON=$(az containerapp show -g "$RG" -n "$APP" -o json)
+                        LATEST=$(jq -r '.properties.latestRevisionName // ""' <<<"$JSON")
+                        READY=$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$JSON")
+                        RUNNING=$(jq -r '.properties.runningStatus // ""' <<<"$JSON")
+                        ACTUAL_IMAGE=$(jq -r '.properties.template.containers[0].image // ""' <<<"$JSON")
+                        if [[ "$LATEST" == "$READY" && "$RUNNING" == 'Running' && "$ACTUAL_IMAGE" == "$IMAGE" ]]; then
+                          FQDN=$(jq -r '.properties.configuration.ingress.fqdn // ""' <<<"$JSON")
+                          curl --fail --silent --show-error --max-time 30 "https://$FQDN/admin" >/dev/null
+                          echo "SUCCESS: Admin revision is healthy. Rollback image: $PREVIOUS_IMAGE"
+                          exit 0
+                        fi
+                        sleep 10
+                      done
+                      echo "ERROR: Admin revision did not become ready. Roll back to: $PREVIOUS_IMAGE" >&2
+                      exit 1

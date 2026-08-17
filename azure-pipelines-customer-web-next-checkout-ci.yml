@@ -1,0 +1,36 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+variables:
+  appPath: apps/customer-web-next
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd "$(appPath)"
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Typecheck, test and build customer checkout
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-customer-checkout-apim.sh
+      python3 - <<'PY'
+      import xml.etree.ElementTree as ET
+      ET.parse('infra/apim/customer-checkout/customer-checkout-policy.xml')
+      print('Customer checkout policy XML is valid.')
+      PY
+      grep -q 'deliveryAddressId' apps/customer-web-next/src/lib/checkout-contract.ts
+      grep -q 'isSameOrigin' apps/customer-web-next/src/app/api/checkout/route.ts
+      if grep -REn '(platformFee|taxAmount|deliveryFee|grandTotal).*[-+*/]' apps/customer-web-next/src/components/customer-checkout.tsx; then
+        echo 'ERROR: Frontend checkout appears to calculate backend-owned charges.' >&2
+        exit 1
+      fi
+      echo 'Checkout charge and APIM safety controls passed.'
+    displayName: Verify checkout safety controls

@@ -1,0 +1,47 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmSandboxRollback
+    displayName: Confirm disabling Subscription sandbox runtime workers
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: subscriptionContainerAppName
+    type: string
+    default: ca-craves-subscription-service-p
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - bash: |
+      set -euo pipefail
+      CONFIRM='${{ parameters.confirmSandboxRollback }}'
+      [[ "${CONFIRM,,}" == "true" ]] || { echo 'ERROR: confirmSandboxRollback must be true.' >&2; exit 1; }
+      echo 'Explicit Subscription sandbox rollback confirmation: PASS'
+    displayName: Require explicit rollback confirmation
+
+  - task: AzureCLI@2
+    displayName: Roll Subscription sandbox runtime back to fail-closed
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: scripts/release/subscription-sandbox-runtime-rollback.sh
+    env:
+      RESOURCE_GROUP: ${{ parameters.resourceGroupName }}
+      SUBSCRIPTION_APP: ${{ parameters.subscriptionContainerAppName }}
+      INTEGRATION_APP: ${{ parameters.integrationContainerAppName }}
+      ORDER_APP: ${{ parameters.orderContainerAppName }}
+      CONFIRM_SUBSCRIPTION_SANDBOX_ROLLBACK: ${{ parameters.confirmSandboxRollback }}
+      ROLLBACK_ID: $(Build.BuildId)-rollback

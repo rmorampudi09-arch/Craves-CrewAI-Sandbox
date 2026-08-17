@@ -1,0 +1,50 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: JavaToolInstaller@0
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+    displayName: Use Java 21
+  - script: |
+      set -euo pipefail
+      mvn -f services/integration-service/pom.xml -B test
+    displayName: Test Integration Service payment ownership
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      NEXT_PUBLIC_CASHFREE_MODE=sandbox npm run typecheck
+      NEXT_PUBLIC_CASHFREE_MODE=sandbox npm run test
+      NEXT_PUBLIC_CASHFREE_MODE=sandbox npm run build
+    displayName: Typecheck, test and build customer payment web
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-customer-payments-apim.sh
+      python3 - <<'PY'
+      import xml.etree.ElementTree as ET
+      ET.parse('infra/apim/customer-payments/customer-payment-policy.xml')
+      print('Customer payment policy XML is valid.')
+      PY
+      grep -q 'getPaymentOrder(String authorizationHeader' services/integration-service/src/main/java/in/craves/integration/service/PaymentService.java
+      grep -q 'verifyPayment(String authorizationHeader' services/integration-service/src/main/java/in/craves/integration/service/PaymentService.java
+      grep -q 'fetchOwnedCheckout' services/integration-service/src/main/java/in/craves/integration/service/PaymentService.java
+      grep -q 'https://sdk.cashfree.com/js/v3/cashfree.js' apps/customer-web-next/src/components/cashfree-payment.tsx
+      if grep -REn '(x-client-secret|x-client-key|accesskey=|client_secret)' apps/customer-web-next services/integration-service/src/main/java | grep -v '"x-client-" + "secret"'; then
+        echo 'ERROR: Possible payment credential literal or exposed secret header.' >&2
+        exit 1
+      fi
+      if grep -REn 'console\.(log|debug).*?(paymentSession|token|secret)' apps/customer-web-next/src; then
+        echo 'ERROR: Payment session or token logging found.' >&2
+        exit 1
+      fi
+      echo 'Payment ownership, SDK and secret-safety controls passed.'
+    displayName: Verify payment security controls

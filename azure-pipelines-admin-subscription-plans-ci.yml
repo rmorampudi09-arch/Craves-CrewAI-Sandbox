@@ -1,0 +1,33 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test admin subscription plans
+  - script: |
+      set -euo pipefail
+      grep -q 'isSameOrigin' apps/customer-web-next/src/app/api/admin/subscription-plans/route.ts
+      grep -q 'parseAdminPlanStatus' apps/customer-web-next/src/app/api/admin/subscription-plans/\[planId\]/status/route.ts
+      grep -q 'status=APPROVED' apps/customer-web-next/src/app/api/admin/subscription-plans/chefs/route.ts
+      if grep -REn '(localStorage|sessionStorage|console\.(log|debug)|discount|commission|tax|deliveryFee)' \
+        apps/customer-web-next/src/components/admin-subscription-plan-manager.tsx \
+        apps/customer-web-next/src/app/admin/subscription-plans \
+        apps/customer-web-next/src/app/api/admin/subscription-plans; then
+        echo 'ERROR: Admin plan runtime introduced insecure storage/logging or unapproved pricing logic.' >&2
+        exit 1
+      fi
+      echo 'Admin subscription plan gates passed.'
+    displayName: Verify subscription plan administration safety

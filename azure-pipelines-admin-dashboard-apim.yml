@@ -1,0 +1,39 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmApimWrite
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    persistCredentials: false
+  - script: |
+      chmod +x scripts/apim/configure-admin-dashboard-apim.sh
+      bash -n scripts/apim/configure-admin-dashboard-apim.sh
+    displayName: Validate dashboard APIM script
+  - task: AzureCLI@2
+    displayName: Configure admin dashboard APIM operation
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: scripts/apim/configure-admin-dashboard-apim.sh
+    env:
+      RG: ${{ parameters.resourceGroupName }}
+      APIM: ${{ parameters.apimName }}
+      ORDER_APP: ${{ parameters.orderContainerAppName }}
+      CONFIRM_APIM_WRITE: ${{ parameters.confirmApimWrite }}

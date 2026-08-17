@@ -1,0 +1,45 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/mobile/customer-app
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test mobile checkout and payment
+  - script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json
+      from pathlib import Path
+      package = json.loads(Path('apps/mobile/customer-app/package.json').read_text())
+      assert package['dependencies']['react-native-cashfree-pg-sdk'] == '2.4.0'
+      assert package['dependencies']['cashfree-pg-api-contract'] == '2.1.1'
+      source = Path('apps/mobile/customer-app/src/screens/MobilePaymentScreen.tsx').read_text()
+      assert 'CFPaymentGatewayService.setCallback' in source
+      assert 'CFPaymentGatewayService.doWebPayment' in source
+      assert source.index('CFPaymentGatewayService.setCallback') < source.index('CFPaymentGatewayService.doWebPayment')
+      assert 'CFEnvironment.SANDBOX' in source
+      assert 'verifyPayment(session' in source
+      print('Cashfree SDK version, callback order, sandbox and backend verification gates passed.')
+      PY
+      if grep -REn '(CFEnvironment\.PRODUCTION|AsyncStorage|console\.(log|debug).*?(payment|token|session|secret))' apps/mobile/customer-app/src apps/mobile/customer-app/package.json --exclude='*.test.ts'; then
+        echo 'ERROR: Production Cashfree activation, insecure storage or sensitive logging found.' >&2
+        exit 1
+      fi
+      if grep -REn '(paymentSessionId|cashfreeOrderId)' apps/mobile/customer-app/src/auth apps/mobile/customer-app/src/*store* 2>/dev/null; then
+        echo 'ERROR: Cashfree session identifiers must remain ephemeral and outside persistent session storage.' >&2
+        exit 1
+      fi
+      grep -q 'await validateCart' apps/mobile/customer-app/src/screens/MobileCheckoutScreen.tsx
+      grep -q 'createCheckout(session' apps/mobile/customer-app/src/screens/MobileCheckoutScreen.tsx
+      echo 'Mobile checkout and payment safety controls passed.'
+    displayName: Verify Cashfree and checkout controls

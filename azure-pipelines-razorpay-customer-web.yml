@@ -1,0 +1,112 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: targetEnvironment
+    type: string
+    default: sandbox
+    values: [sandbox, production]
+  - name: confirmReplaceCurrentCustomerWeb
+    type: boolean
+    default: false
+  - name: imageTag
+    type: string
+    default: $(Build.BuildId)
+
+variables:
+  AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection
+  resourceGroup: rg-craves-prodlow-centralindia
+  acrName: cravesprodlowacr82121
+  containerApp: ca-craves-web-prodlow
+  imageRepository: craves/customer-web-next
+  appPath: apps/customer-web-next
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+  - task: NodeTool@0
+    inputs:
+      versionSpec: 24.x
+  - bash: |
+      set -euo pipefail
+      confirm='${{ parameters.confirmReplaceCurrentCustomerWeb }}'
+      [[ "${confirm,,}" == true ]] || { echo 'confirmReplaceCurrentCustomerWeb must be true.' >&2; exit 2; }
+      for name in NEXT_PUBLIC_FIREBASE_API_KEY NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN NEXT_PUBLIC_FIREBASE_PROJECT_ID NEXT_PUBLIC_FIREBASE_APP_ID NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET; do
+        value="${!name:-}"
+        if [[ -z "$value" || "$value" == '$('* || "$value" == replace-* ]]; then
+          echo "Missing or unresolved Azure DevOps variable $name." >&2
+          exit 2
+        fi
+      done
+      [[ "$NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN" == 'cravesapp-dev.firebaseapp.com' ]] || { echo 'Unexpected Firebase auth domain.' >&2; exit 2; }
+      [[ "$NEXT_PUBLIC_FIREBASE_PROJECT_ID" == 'cravesapp-dev' ]] || { echo 'Unexpected Firebase project ID.' >&2; exit 2; }
+      [[ "$NEXT_PUBLIC_FIREBASE_APP_ID" == '1:201887934076:web:2f20d18dc85894cc700bf9' ]] || { echo 'Unexpected Firebase web app ID.' >&2; exit 2; }
+      [[ "$NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID" == '201887934076' ]] || { echo 'Unexpected Firebase messaging sender ID.' >&2; exit 2; }
+      [[ "$NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET" == 'cravesapp-dev.firebasestorage.app' ]] || { echo 'Unexpected Firebase storage bucket.' >&2; exit 2; }
+      npm ci --no-audit --no-fund
+      npm run lint
+      npm run typecheck
+      npm run test
+      npm run build
+      if grep -R -F -q '$(NEXT_PUBLIC_FIREBASE_' .next/static; then
+        echo 'Unresolved Firebase variable placeholder found in the production web bundle.' >&2
+        exit 2
+      fi
+    workingDirectory: $(appPath)
+    displayName: Verify Razorpay customer web
+    env:
+      CRAVES_API_BASE_URL: https://api.craves.in/api/v1
+      NEXT_PUBLIC_FIREBASE_API_KEY: $(NEXT_PUBLIC_FIREBASE_API_KEY)
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: $(NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: $(NEXT_PUBLIC_FIREBASE_PROJECT_ID)
+      NEXT_PUBLIC_FIREBASE_APP_ID: $(NEXT_PUBLIC_FIREBASE_APP_ID)
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: $(NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: $(NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)
+      NEXT_PUBLIC_RAZORPAY_MODE: ${{ parameters.targetEnvironment }}
+      NEXT_PUBLIC_CRAVES_ALLOW_CATALOG_FALLBACK: 'false'
+  - task: AzureCLI@2
+    displayName: Build, deploy and verify Razorpay customer web
+    env:
+      NEXT_PUBLIC_FIREBASE_API_KEY: $(NEXT_PUBLIC_FIREBASE_API_KEY)
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: $(NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: $(NEXT_PUBLIC_FIREBASE_PROJECT_ID)
+      NEXT_PUBLIC_FIREBASE_APP_ID: $(NEXT_PUBLIC_FIREBASE_APP_ID)
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: $(NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: $(NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        set +x
+        previous=$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query 'properties.template.containers[0].image' -o tsv)
+        login=$(az acr show -g '$(resourceGroup)' -n '$(acrName)' --query loginServer -o tsv)
+        image="$login/$(imageRepository):${{ parameters.imageTag }}"
+        az acr login -n '$(acrName)'
+        docker build \
+          --build-arg NEXT_PUBLIC_FIREBASE_API_KEY="$NEXT_PUBLIC_FIREBASE_API_KEY" \
+          --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="$NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN" \
+          --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID="$NEXT_PUBLIC_FIREBASE_PROJECT_ID" \
+          --build-arg NEXT_PUBLIC_FIREBASE_APP_ID="$NEXT_PUBLIC_FIREBASE_APP_ID" \
+          --build-arg NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID="$NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID" \
+          --build-arg NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET="$NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET" \
+          --build-arg NEXT_PUBLIC_RAZORPAY_MODE='${{ parameters.targetEnvironment }}' \
+          --build-arg NEXT_PUBLIC_CRAVES_ALLOW_CATALOG_FALLBACK=false \
+          --label org.opencontainers.image.revision='$(Build.SourceVersion)' \
+          -t "$image" '$(appPath)'
+        docker push "$image"
+        az containerapp update -g '$(resourceGroup)' -n '$(containerApp)' --image "$image" \
+          --set-env-vars NEXT_PUBLIC_RAZORPAY_MODE='${{ parameters.targetEnvironment }}' >/dev/null
+        fqdn=$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query properties.configuration.ingress.fqdn -o tsv)
+        for _ in $(seq 1 30); do
+          readiness=$(curl -fsS --max-time 20 "https://${fqdn}/api/readiness/razorpay" 2>/dev/null || true)
+          [[ "$(jq -r '.razorpayMode // empty' <<<"$readiness")" == '${{ parameters.targetEnvironment }}' ]] && exit 0
+          sleep 10
+        done
+        echo 'Razorpay customer web verification failed; restoring previous image.' >&2
+        az containerapp update -g '$(resourceGroup)' -n '$(containerApp)' --image "$previous" >/dev/null
+        exit 2

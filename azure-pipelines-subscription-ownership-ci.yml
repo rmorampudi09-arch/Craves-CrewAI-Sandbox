@@ -1,0 +1,33 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - script: |
+      set -euo pipefail
+      cd services/subscription-service
+      mvn -B clean test
+    displayName: Compile and test Subscription Service
+
+  - script: |
+      set -euo pipefail
+      grep -q 'listPlansForChef' services/subscription-service/src/main/java/in/craves/subscription/service/SubscriptionService.java
+      grep -q 'findActivePlanById' services/subscription-service/src/main/java/in/craves/subscription/service/SubscriptionService.java
+      grep -q 'subscription_plan_audit' services/subscription-service/src/main/resources/db/migration/V2__subscription_plan_audit.sql
+      if grep -n 'chefIdentityId = request.chefIdentityId' services/subscription-service/src/main/java/in/craves/subscription/service/SubscriptionService.java; then
+        echo 'ERROR: Chef-controlled plan ownership can still be supplied from the request.' >&2
+        exit 1
+      fi
+      echo 'Subscription ownership and audit gates passed.'
+    displayName: Verify subscription ownership gates

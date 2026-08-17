@@ -1,0 +1,22 @@
+trigger: none
+pr: none
+parameters:
+  - name: confirmConfigureCustomerCart
+    type: boolean
+    default: false
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - script: |
+      set -euo pipefail
+      CONFIRM='${{ parameters.confirmConfigureCustomerCart }}'
+      [[ "${CONFIRM,,}" == 'true' ]] || { echo 'ERROR: confirmConfigureCustomerCart must be true.' >&2; exit 1; }
+    displayName: Confirm customer cart APIM change
+  - task: AzureCLI@2
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: scripts/apim/configure-customer-cart-apim.sh
+    displayName: Configure customer cart APIM operations

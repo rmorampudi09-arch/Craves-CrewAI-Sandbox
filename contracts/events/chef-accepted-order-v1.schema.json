@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.craves.in/events/chef-accepted-order-v1.schema.json",
+  "title": "CHEF_ACCEPTED_ORDER v1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "correlationId",
+    "source",
+    "subject",
+    "data"
+  ],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "CHEF_ACCEPTED_ORDER" },
+    "eventVersion": { "const": "1.0" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "format": "uuid" },
+    "causationId": {
+      "type": ["string", "null"],
+      "format": "uuid"
+    },
+    "source": { "const": "order-service" },
+    "subject": { "type": "string", "format": "uuid" },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "orderId",
+        "chefSubOrderId",
+        "readyAt",
+        "area",
+        "deliveryRequest"
+      ],
+      "properties": {
+        "orderId": { "type": "string", "format": "uuid" },
+        "chefSubOrderId": { "type": "string", "format": "uuid" },
+        "readyAt": { "type": "string", "format": "date-time" },
+        "distanceKm": { "type": ["number", "null"], "minimum": 0 },
+        "area": { "type": "string", "minLength": 1 },
+        "deliveryRequest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "matter",
+            "totalWeightGrams",
+            "thermoboxRequired",
+            "pickup",
+            "dropoff"
+          ],
+          "properties": {
+            "matter": { "type": "string", "minLength": 1 },
+            "totalWeightGrams": { "type": "integer", "minimum": 1 },
+            "thermoboxRequired": { "type": "boolean" },
+            "pickup": { "$ref": "#/$defs/stop" },
+            "dropoff": { "$ref": "#/$defs/stop" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "address",
+        "contactName",
+        "contactPhone",
+        "latitude",
+        "longitude"
+      ],
+      "properties": {
+        "address": { "type": "string", "minLength": 1 },
+        "contactName": { "type": "string", "minLength": 1 },
+        "contactPhone": { "type": "string", "minLength": 1 },
+        "latitude": { "type": "number", "minimum": -90, "maximum": 90 },
+        "longitude": { "type": "number", "minimum": -180, "maximum": 180 },
+        "requiredStart": { "type": ["string", "null"], "format": "date-time" },
+        "requiredFinish": { "type": ["string", "null"], "format": "date-time" },
+        "note": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

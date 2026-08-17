@@ -1,0 +1,26 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - script: |
+      cd services/integration-service
+      mvn -B clean verify
+    displayName: Compile and run Integration Service tests
+
+  - script: |
+      for schema in contracts/events/*.schema.json; do
+        python3 -m json.tool "$schema" >/dev/null
+      done
+    displayName: Validate all domain-event schema JSON files

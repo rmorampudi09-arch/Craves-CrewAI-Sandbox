@@ -1,0 +1,166 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: targetEnvironment
+    type: string
+    default: SANDBOX
+    values:
+      - SANDBOX
+      - PRODUCTION
+  - name: enableProvider
+    type: boolean
+    default: false
+  - name: confirmProductionActivation
+    type: boolean
+    default: false
+  - name: providerBaseUrl
+    type: string
+    default: https://replace-before-run.invalid
+  - name: authSecretName
+    type: string
+    default: porter-api-token
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+
+variables:
+  AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - task: AzureCLI@2
+    displayName: Apply fail-closed Porter environment state
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        set +x
+
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.integrationContainerAppName }}'
+        environment='${{ parameters.targetEnvironment }}'
+        enable_raw='${{ parameters.enableProvider }}'
+        enable="${enable_raw,,}"
+        confirm_raw='${{ parameters.confirmProductionActivation }}'
+        confirm="${confirm_raw,,}"
+        base_url='${{ parameters.providerBaseUrl }}'
+        secret_name='${{ parameters.authSecretName }}'
+        app_yml='services/integration-service/src/main/resources/application.yml'
+        adapter_dir='services/integration-service/src/main/java/in/craves/integration/delivery/porter'
+
+        fail() { echo "ERROR: $*" >&2; exit 2; }
+
+        wait_ready() {
+          local latest ready
+          latest="$(az containerapp show -g "$RG" -n "$APP" --query properties.latestRevisionName -o tsv --only-show-errors)"
+          for _ in $(seq 1 60); do
+            ready="$(az containerapp show -g "$RG" -n "$APP" --query properties.latestReadyRevisionName -o tsv --only-show-errors 2>/dev/null || true)"
+            [[ "$ready" == "$latest" ]] && return 0
+            sleep 10
+          done
+          fail 'Integration Service revision did not become ready.'
+        }
+
+        [[ "$environment" == 'SANDBOX' || "$environment" == 'PRODUCTION' ]] || fail 'targetEnvironment must be SANDBOX or PRODUCTION.'
+        [[ "$enable" == 'true' || "$enable" == 'false' ]] || fail 'enableProvider must resolve to true or false.'
+
+        runtime_config_present=false
+        if grep -Fq 'PORTER_API_ENABLED' "$app_yml" && grep -Fq 'PORTER_API_ENVIRONMENT' "$app_yml"; then
+          runtime_config_present=true
+        fi
+        adapter_present=false
+        if [[ -d "$adapter_dir" ]] && find "$adapter_dir" -type f -name '*.java' -print -quit | grep -q .; then
+          adapter_present=true
+        fi
+
+        # Today this intentionally permits only SIMPLE_SANDBOX. Production/full sandbox remains
+        # impossible until Porter's Enterprise API contract is issued and implemented.
+        if [[ "$enable" == 'true' || "$environment" == 'PRODUCTION' ]]; then
+          [[ "$adapter_present" == 'true' ]] || fail 'ENTERPRISE_API_ONBOARDING_REQUIRED: Porter Spring adapter is not implemented.'
+          [[ "$runtime_config_present" == 'true' ]] || fail 'ENTERPRISE_API_ONBOARDING_REQUIRED: Porter runtime configuration is not implemented.'
+          [[ "$base_url" == https://* && "$base_url" != *replace-before-run.invalid* ]] || fail 'Porter vendor-issued HTTPS base URL is required.'
+          [[ "$environment" != 'PRODUCTION' || "$confirm" == 'true' ]] || fail 'Production switch requires confirmProductionActivation=true.'
+          lower="${base_url,,}"
+          [[ "$environment" != 'PRODUCTION' || ( "$lower" != *test* && "$lower" != *sandbox* && "$lower" != *stage* ) ]] || fail 'Porter production cannot use a test/stage/sandbox host.'
+          secrets="$(az containerapp secret list -g "$RG" -n "$APP" --query '[].name' -o tsv --only-show-errors)"
+          grep -qx "$secret_name" <<<"$secrets" || fail "Missing Container App secret $secret_name."
+        fi
+
+        db_url="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='SPRING_DATASOURCE_URL']|[0].value" -o tsv --only-show-errors)"
+        db_user="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='SPRING_DATASOURCE_USERNAME']|[0].value" -o tsv --only-show-errors)"
+        db_secret_url="$(az containerapp secret list -g "$RG" -n "$APP" --query "[?name=='kv-db-password']|[0].keyVaultUrl" -o tsv --only-show-errors)"
+        [[ "$db_url" == jdbc:postgresql://* && -n "$db_user" && "$db_secret_url" == https://*.vault.azure.net/secrets/* ]] || fail 'Integration database binding is incomplete.'
+        vault_name="$(cut -d. -f1 <<<"${db_secret_url#https://}")"
+        db_secret_name="${db_secret_url##*/}"
+        db_password="$(az keyvault secret show --vault-name "$vault_name" --name "$db_secret_name" --query value -o tsv --only-show-errors)"
+        export PGPASSWORD="$db_password" PGUSER="$db_user"
+        DB="${db_url#jdbc:}"
+
+        if [[ "$enable" == 'false' ]]; then
+          psql "$DB" -v ON_ERROR_STOP=1 -c "UPDATE delivery_schema.delivery_provider SET is_active=FALSE, updated_at=now() WHERE provider_id='porter';" >/dev/null
+          az containerapp update -g "$RG" -n "$APP" \
+            --set-env-vars \
+              PORTER_API_ENVIRONMENT="$environment" \
+              PORTER_PRODUCTION_ACTIVATION_APPROVED=false \
+              PORTER_API_ENABLED=false \
+              CRAVES_DELIVERY_INTELLIGENCE_ENABLED=true >/dev/null
+          wait_ready
+        else
+          approved=false
+          [[ "$environment" == 'PRODUCTION' ]] && approved=true
+          az containerapp update -g "$RG" -n "$APP" \
+            --set-env-vars \
+              PORTER_API_ENVIRONMENT="$environment" \
+              PORTER_PRODUCTION_ACTIVATION_APPROVED="$approved" \
+              PORTER_API_BASE_URL="$base_url" \
+              PORTER_API_AUTH_TOKEN="secretref:${secret_name}" \
+              PORTER_API_ENABLED=true \
+              CRAVES_DELIVERY_RECONCILIATION_ENABLED=true \
+              CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED=true \
+              CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED=true \
+              CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED=true \
+              CRAVES_DELIVERY_INTELLIGENCE_ENABLED=true >/dev/null
+          wait_ready
+          psql "$DB" -v ON_ERROR_STOP=1 -c "UPDATE delivery_schema.delivery_provider SET is_active=TRUE, updated_at=now() WHERE provider_id='porter';" >/dev/null
+          [[ "$(psql "$DB" -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM delivery_schema.delivery_provider WHERE provider_id='porter' AND is_active=TRUE;")" == '1' ]] || fail 'Porter provider catalog activation failed.'
+          az containerapp update -g "$RG" -n "$APP" --set-env-vars CRAVES_DELIVERY_COMMAND_ENABLED=true >/dev/null
+          wait_ready
+        fi
+
+        if [[ "$enable" == 'false' ]]; then
+          [[ "$(psql "$DB" -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM delivery_schema.delivery_provider WHERE provider_id='porter' AND is_active=TRUE;")" == '0' ]] || fail 'Porter provider catalog is not fail-closed.'
+          active_provider_count="$(psql "$DB" -At -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) FROM delivery_schema.delivery_provider WHERE is_active=TRUE;")"
+          if [[ "$active_provider_count" == '0' ]]; then
+            az containerapp update -g "$RG" -n "$APP" --set-env-vars CRAVES_DELIVERY_COMMAND_ENABLED=false >/dev/null
+            wait_ready
+          else
+            echo "INFO: $active_provider_count other provider(s) remain active; global delivery worker remains unchanged."
+          fi
+        fi
+
+        env_json="$(az containerapp show -g "$RG" -n "$APP" --query 'properties.template.containers[0].env' -o json --only-show-errors)"
+        value() { jq -r --arg name "$1" '.[] | select(.name == $name) | (.value // "")' <<<"$env_json" | tail -1; }
+        [[ "$(value PORTER_API_ENVIRONMENT)" == "$environment" ]] || fail 'Porter environment verification failed.'
+        [[ "$(value PORTER_API_ENABLED)" == "$enable" ]] || fail 'Porter enabled-state verification failed.'
+
+        unset db_password PGPASSWORD PGUSER
+        echo '============================================================'
+        echo 'PORTER DELIVERY PROVIDER SWITCH: PASS'
+        echo "Environment: $environment"
+        echo "Provider enabled: $enable"
+        [[ "$enable" == 'false' ]] && echo 'Mode: SIMPLE_SANDBOX / FAIL_CLOSED'
+        echo "Spring adapter detected: $adapter_present"
+        echo "Spring runtime configuration detected: $runtime_config_present"
+        echo '============================================================'

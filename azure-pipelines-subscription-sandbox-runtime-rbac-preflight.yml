@@ -1,0 +1,84 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmServiceBusRbacWrite
+    displayName: Confirm Service Bus RBAC write
+    type: boolean
+    default: false
+
+  - name: resourceGroupName
+    displayName: Resource group
+    type: string
+    default: rg-craves-prodlow-centralindia
+
+  - name: subscriptionContainerAppName
+    displayName: Subscription Container App
+    type: string
+    default: ca-craves-subscription-service-p
+
+  - name: integrationContainerAppName
+    displayName: Integration Container App
+    type: string
+    default: ca-craves-integration-service-pr
+
+  - name: orderContainerAppName
+    displayName: Order Container App
+    type: string
+    default: ca-craves-order-service-prodlow
+
+  - name: serviceBusNamespace
+    displayName: Service Bus namespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+
+  - name: serviceBusTopic
+    displayName: Service Bus topic
+    type: string
+    default: craves-domain-events
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - bash: |
+      set -euo pipefail
+      bash -n scripts/release/subscription-sandbox-runtime-rbac-ensure.sh
+      bash -n scripts/release/subscription-sandbox-runtime-preflight.sh
+
+      if grep -nE 'local[^\n]*\bPATH=' \
+        scripts/release/subscription-sandbox-runtime-rbac-ensure.sh \
+        scripts/release/subscription-sandbox-runtime-preflight.sh; then
+        echo 'ERROR: Runtime scripts must not shadow the process PATH variable.' >&2
+        exit 1
+      fi
+
+      if grep -nE 'CRAVES_CASHFREE_PRODUCTION_(ACTIVATION_APPROVED|PAYMENT_EXECUTION_ENABLED)=true' \
+        scripts/release/subscription-sandbox-runtime-rbac-ensure.sh; then
+        echo 'ERROR: RBAC remediation must not enable Cashfree production flags.' >&2
+        exit 1
+      fi
+    displayName: Validate RBAC remediation assets
+
+  - task: AzureCLI@2
+    displayName: Ensure Service Bus runtime RBAC and rerun preflight
+    inputs:
+      azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        export RESOURCE_GROUP='${{ parameters.resourceGroupName }}'
+        export SUBSCRIPTION_APP='${{ parameters.subscriptionContainerAppName }}'
+        export INTEGRATION_APP='${{ parameters.integrationContainerAppName }}'
+        export ORDER_APP='${{ parameters.orderContainerAppName }}'
+        export SERVICE_BUS_NAMESPACE='${{ parameters.serviceBusNamespace }}'
+        export SERVICE_BUS_TOPIC='${{ parameters.serviceBusTopic }}'
+        export CONFIRM_SERVICE_BUS_RBAC_WRITE='${{ parameters.confirmServiceBusRbacWrite }}'
+
+        bash scripts/release/subscription-sandbox-runtime-rbac-ensure.sh
+
+        echo 'RBAC remediation complete. Running the existing read-only sandbox runtime preflight in the same job.'
+        bash scripts/release/subscription-sandbox-runtime-preflight.sh

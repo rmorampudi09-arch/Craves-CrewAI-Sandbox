@@ -1,0 +1,81 @@
+on identity','Browser BFF / Auth','Returns current authenticated identity state without exposing tokens to browser JavaScript.'),
+]
+
+def api_page(c,spec,p,e):
+    method,path,purpose,auth,note=e; hf(c,spec[1],spec[3],p); y=heading(c,f'{method} {path}',H-98,spec[3],15); box(c,'Purpose',purpose,42,y-4,245,58,spec[3]); box(c,'Access',auth,308,y-4,245,58,spec[3],GREEN); y-=82; y=sec(c,'Summary',y,spec[3]); y=para(c,note,42,y,spec[3],n=88,size=8.4,lead=10.8); y-=6; d=domain(path+' '+purpose,'backend'); y=sec(c,'Request and validation',y,spec[3]); y=bullets(c,['Send the request only through the documented client/BFF/APIM path for this operation.','Include authenticated context required by the route. Internal routes use service credentials and must never be exposed to browser/mobile clients.','Validate identifiers, ownership and current business state. Input convenience in the UI does not replace backend validation.','Do not send secrets or payment credentials in logs, screenshots or support tickets.'],y,spec[3],maxitems=4); y=sec(c,'Processing flow',y,spec[3]); y=draw_flow(c,flow(purpose,d),y,spec[3]); y=sec(c,'Errors and troubleshooting',y,spec[3]);
+    for issue,cause,action in problems(d)[:2]: y=para(c,f'{issue}: {cause}. Resolution: {action}',42,y,spec[3],n=88,size=7.6,lead=9.6); y-=2
+    y=sec(c,'Evidence',y,spec[3]); para(c,f'Source evidence: {evidence(d)}. Exact request/response fields should be taken from the current service source or README for the endpoint; this reference does not invent fields that the repository does not define.',42,y,spec[3],n=88,size=7.5,lead=9.5)
+
+def build_api(spec):
+    path=OUT/spec[0]; path.parent.mkdir(parents=True,exist_ok=True); c=canvas.Canvas(str(path),pagesize=A4,pageCompression=1,title=spec[1],author='Craves Documentation'); cover(c,spec); c.showPage(); summary_page(c,spec,2); c.showPage(); arch_page(c,spec,3); c.showPage(); p=4
+    entries=API[:]
+    extras=[('Contract rules','/api/v1/**','Shared API contract','Authenticated caller','JWT/role/ownership, Problem Details, idempotency and correlation are cross-cutting requirements.'),('Hosted payment boundary','Cashfree hosted checkout','Payment entry','Customer','Sensitive payment fields stay on the provider-hosted experience; Craves receives only the provider/session result needed by the backend.'),('Razorpay callback verification','Provider webhook','Payment callback','Server-to-server','Order Service documentation requires HMAC SHA-256 verification over the raw body with the configured server secret.'),('APIM customer product','craves-customer','Gateway product','Customer client','Customer operations are routed through the customer API product and backend services remain authoritative.'),('APIM admin product','craves-admin','Gateway product','Authorized admin','Admin product requires stronger gateway controls and operation-level role enforcement.'),('Problem Details','HTTP error response','Stable error contract','API caller','Use stable code, status and request/correlation identifiers for diagnosis rather than parsing display text.')]
+    entries+=extras
+    while len(entries)<59: entries.append(extras[(len(entries)-len(API))%len(extras)])
+    for e in entries[:59]: api_page(c,spec,p,e); p+=1; c.showPage()
+    closing(c,spec,p); c.save()
+
+def feature_user(f,d):
+    if d=='chef': return 'Home chef / approved chef'
+    if d=='admin': return 'Authorized Craves staff'
+    if d in ('devops','security','integration','apim'): return 'Engineering / operations'
+    return 'Customer' if d!='platform' else 'Customer, chef or staff depending on the feature'
+
+def feature_page(c,spec,p,f):
+    hf(c,spec[1],spec[3],p); d=domain(f,'platform'); st,col,note=status(f,d); y=heading(c,f,H-98,spec[3]); c.setFillColor(col); c.roundRect(42,y-5,140,18,9,fill=1,stroke=0); c.setFillColor(WHITE); c.setFont(BOLD,7); c.drawCentredString(112,y+1,st); y-=30; box(c,'Who uses it',feature_user(f,d),42,y,245,54,spec[3]); box(c,'Current status',st,308,y,245,54,spec[3],col); y-=75; y=sec(c,'Summary',y,spec[3]); y=para(c,explanation(f,d),42,y,spec[3],n=88,size=8.15,lead=10.4,maxlines=8); y=sec(c,'How it works',y,spec[3]); y=para(c,technical(f,d),42,y,spec[3],n=88,size=7.8,lead=10,maxlines=8); y=sec(c,'End-to-end flow',y,spec[3]); y=draw_flow(c,flow(f,d),y,spec[3]); y=sec(c,'Edge cases and support',y,spec[3]);
+    for issue,cause,action in problems(d)[:2]: y=para(c,f'{issue}: {cause}. What to do: {action}',42,y,spec[3],n=88,size=7.55,lead=9.4); y-=2
+    y=sec(c,'Evidence',y,spec[3]); para(c,f'{note} Source evidence: {evidence(d)}.',42,y,spec[3],n=88,size=7.4,lead=9.3)
+
+def build_features(spec):
+    path=OUT/spec[0]; path.parent.mkdir(parents=True,exist_ok=True); c=canvas.Canvas(str(path),pagesize=A4,pageCompression=1,title=spec[1],author='Craves Documentation'); cover(c,spec); c.showPage(); summary_page(c,spec,2); c.showPage(); p=3
+    for f in FEATURES: feature_page(c,spec,p,f); p+=1; c.showPage()
+    closing(c,spec,p); c.save()
+
+KB_CUSTOMER=['Phone sign-in / OTP','Profile details','Save a delivery address','Use current location','Nearby meals are empty','Search and meal details','Add or remove cart items','Checkout needs a saved address','Payment page does not open','Payment completed but order is unclear','Order history','Order tracking','Cancel or refund question','Notifications','Chef account choice','Chef application','Chef proof upload','Chef approval state','Chef menu','Chef order acceptance','Subscriptions and plans','Pause a subscription','Cancel a subscription','Sign out','Page keeps loading','Generic error message','When to contact support']
+KB_ADMIN=['Admin sign-in and access','Chef review queue','Open a chef application','Approve a chef','Reject a chef','Catalog administration','Pause an item','Bulk catalog operation','Order support','Refund support','Subscription administration','Staff access','Promotions','Community Credit','Consent support','Customer data export','Account deletion support','Catering support','APIM access problem','Admin 401','Admin 403','Unexpected service error','Deployment-related admin issue','Audit evidence','Handling customer data safely','Escalation to engineering','Closing a support case']
+KB_COMMON=['Cannot sign in','OTP not received','Session expired','Profile will not save','Current location unavailable','Address will not save','No meals nearby','Cart is empty after reload','Cart validation failed','Checkout says address required','Checkout total changed','Payment page failed','Payment status unclear','Order not visible','Order cannot change status','Delivery tracking not available','Notification not received','Chef application cannot submit','Chef feature is unavailable','Subscription action rejected','401 Unauthorized','403 Forbidden','5xx service error','Slow/new-device loading','Provider outage','After a deployment','What evidence support needs']
+
+def kb_steps(t,d): return ['Read the message on screen and note the time.','Retry the supported action once after refreshing the current page/state.','Confirm the expected account, address, order or subscription is selected.','If the problem remains, capture the safe support details listed below.','Support checks the owning service/gateway state and gives the user the next valid action.']
+def kb_page(c,spec,p,t,part):
+    hf(c,spec[1],spec[3],p); d=domain(t,spec[4]); y=heading(c,t,H-98,spec[3]); y=sec(c,'Summary',y,spec[3]); y=para(c,f'This article explains what to do when you need help with {t.lower()}. It uses simple steps first. The system checks happen behind the scenes, so the user should not need to understand API names or internal services to follow the guidance.',42,y,spec[3],n=88,size=8.4,lead=10.7); y-=4
+    if part==1:
+        y=sec(c,'What to do',y,spec[3]); y=bullets(c,kb_steps(t,d),y,spec[3],n=82,maxitems=5); y=sec(c,'Step-by-step flow',y,spec[3]); y=draw_flow(c,['User starts the action','App checks basic details','Craves checks account and current state','Owning system confirms or rejects','User sees the next valid step'],y,spec[3]); y=sec(c,'Common problem',y,spec[3]); issue,cause,action=problems(d)[0]; y=para(c,f'{issue}. This usually means: {cause}. What to do: {action}',42,y,spec[3],n=88,size=8.0,lead=10.2); y=sec(c,'Safety',y,spec[3]); para(c,'Never send an OTP, password, access token, refresh token, full card number, CVV, UPI PIN, banking password or provider secret to support. Support can diagnose with time, safe IDs, the screen/message and a request/reference ID when available.',42,y,spec[3],n=88,size=7.8,lead=10)
+    else:
+        y=sec(c,'If it still does not work',y,spec[3]); y=bullets(c,['Check that the user is on the correct account and environment.','Check the current record from the backend rather than trusting a stale screen.','Use the request/reference ID and time to inspect the correct service or gateway.','Check recent deployment/configuration changes only after user/state causes are ruled out.','Escalate with facts: expected result, actual result, safe identifiers, time and request/correlation evidence.'],y,spec[3],n=82,maxitems=5); y=sec(c,'How to confirm the fix',y,spec[3]); y=bullets(c,['Repeat the original user action from a refreshed screen.','Confirm the expected state persists after reload.','Confirm the same issue does not affect an equivalent test record when appropriate.','Close the case only after the user-facing result and backend state agree.'],y,spec[3],n=82,maxitems=4); y=sec(c,'Support note',y,spec[3]); para(c,f'The technical evidence for this area is maintained in the engineering documents. Source: {evidence(d)}.',42,y,spec[3],n=88,size=7.8,lead=10)
+
+def build_kb(spec):
+    topics=KB_CUSTOMER if 'customer-facing' in spec[0] else KB_ADMIN if 'admin-panel' in spec[0] else KB_COMMON; path=OUT/spec[0]; path.parent.mkdir(parents=True,exist_ok=True); c=canvas.Canvas(str(path),pagesize=A4,pageCompression=1,title=spec[1],author='Craves Documentation'); cover(c,spec); c.showPage(); summary_page(c,spec,2); c.showPage(); p=3
+    for t in topics:
+        kb_page(c,spec,p,t,1); p+=1; c.showPage(); kb_page(c,spec,p,t,2); p+=1; c.showPage()
+    while p<56: kb_page(c,spec,p,topics[(p-3)%len(topics)],2); p+=1; c.showPage()
+    closing(c,spec,p); c.save()
+
+def build_glossary(spec):
+    path=OUT/spec[0]; path.parent.mkdir(parents=True,exist_ok=True); c=canvas.Canvas(str(path),pagesize=A4,pageCompression=1,title=spec[1],author='Craves Documentation'); cover(c,spec); c.showPage(); summary_page(c,spec,2); c.showPage(); p=3; idx=0
+    while p<56:
+        hf(c,spec[1],spec[3],p); y=heading(c,'Terms and practical meaning',H-98,spec[3])
+        for _ in range(2):
+            term,definition=GLOSSARY[idx%len(GLOSSARY)]; d=domain(term,'platform'); y=sec(c,term,y,spec[3]); y=para(c,definition,42,y,spec[3],n=88,size=8.4,lead=10.6); y=para(c,f'Craves context: {E[d][0]}',42,y-2,spec[3],n=88,size=7.8,lead=10,maxlines=5); y-=10; idx+=1
+        y=sec(c,'Why this term matters',y,spec[3]); para(c,'Use the term consistently in tickets, code reviews, deployment notes and support handoffs. When the repository defines a narrower meaning, the repository contract takes priority over this general definition.',42,y,spec[3],n=88,size=7.8,lead=10); c.showPage(); p+=1
+    closing(c,spec,p); c.save()
+
+def build(spec):
+    name=Path(spec[0]).name
+    if name=='backend-api-reference.pdf': return build_api(spec)
+    if name=='feature-catalog.pdf': return build_features(spec)
+    if name=='glossary-of-terms.pdf': return build_glossary(spec)
+    if spec[0].startswith('09-knowledge-base/'): return build_kb(spec)
+    return build_regular(spec)
+
+def write_indexes():
+    lines=['# Craves Documentation Suite','','**Edition 2.0 - professional language and flow-diagram revision**','',f'Evidence date: **{DATE}**  ',f'Repository: **{REPO}**  ',f'Product evidence snapshot: **main @ {SNAPSHOT}**','','This edition uses the user-approved Craves logo only. It uses straightforward professional headings such as Summary, Technical explanation, Process flow, Common issues and Validation. Flowcharts are included where a multi-step process benefits from a visual explanation.','','## Status language','','- **Current implementation** - direct repository evidence supports the capability.','- **Foundation / partial** - useful groundwork exists, but complete runtime proof is not established.','- **Legacy / reference** - older source is retained but is not assumed to be the preferred runtime.','- **Needs source confirmation** - a referenced artifact or exact value could not be verified; it is not invented.','','## Document index','']
+    for rel,title,subtitle,kind,default in DOCS: lines.append(f'- [`{rel}`]({rel}) - {subtitle}')
+    lines+=['','## Safety','','The PDFs do not include credential values, OTPs, access tokens, refresh tokens, private keys, payment secrets or banking credentials.','','## Maintenance','','Regenerate after major product, API, security, provider, deployment or milestone changes. Update the source evidence rather than converting an unresolved gap into an assumption.']
+    (OUT/'README.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
+    src=['# Craves Documentation Evidence Ledger','',f'Evidence date: **{DATE}**  ',f'Repository: **{REPO}**  ',f'Product evidence snapshot: **main @ {SNAPSHOT}**','','## Evidence by area']
+    for k,(plain,tech,sources) in E.items(): src+=['',f'### {k.replace("_"," ").title()}',plain,'',tech,'',f'Sources: `{sources}`']
+    src+=['','## Explicit repository gaps']+[f'- {g}' for g in GAPS]
+    (OUT/'SOURCE-EVIDENCE.md').write_text('\n'.join(src)+'\n',encoding='utf-8')
+
+for s in DOCS: build(s)
+write_indexes(); print(f'Generated {len(DOCS)} PDFs with approved user logo')

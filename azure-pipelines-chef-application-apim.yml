@@ -1,0 +1,47 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmConfigureChefApplication
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: userChefContainerAppName
+    type: string
+    default: ca-craves-user-chef-service-prod
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - script: |
+      set -euo pipefail
+      CONFIRM='${{ parameters.confirmConfigureChefApplication }}'
+      [[ "${CONFIRM,,}" == "true" ]] || { echo 'ERROR: confirmConfigureChefApplication must be true.' >&2; exit 1; }
+      bash -n scripts/apim/configure-chef-application-apim.sh
+      bash -n scripts/apim/configure-chef-review-document-list-apim.sh
+    displayName: Confirm and validate APIM scripts
+  - task: AzureCLI@2
+    displayName: Configure chef application operations
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        RG='${{ parameters.resourceGroupName }}' \
+        APIM='${{ parameters.apimName }}' \
+        USER_CHEF_APP='${{ parameters.userChefContainerAppName }}' \
+        bash scripts/apim/configure-chef-application-apim.sh
+
+        RG='${{ parameters.resourceGroupName }}' \
+        APIM='${{ parameters.apimName }}' \
+        USER_CHEF_APP='${{ parameters.userChefContainerAppName }}' \
+        CONFIRM_APIM_WRITE=true \
+        bash scripts/apim/configure-chef-review-document-list-apim.sh

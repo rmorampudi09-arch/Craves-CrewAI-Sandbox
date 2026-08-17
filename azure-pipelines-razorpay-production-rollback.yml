@@ -1,0 +1,37 @@
+trigger: none
+pr: none
+
+variables:
+  AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection
+  resourceGroup: rg-craves-prodlow-centralindia
+  containerApp: ca-craves-integration-service-pr
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+  - task: AzureCLI@2
+    displayName: Fail closed without re-enabling Cashfree
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        az containerapp update -g '$(resourceGroup)' -n '$(containerApp)' \
+          --remove-env-vars PAYMENT_PROVIDER_CLIENT_ID PAYMENT_PROVIDER_CLIENT_KEY \
+          --set-env-vars \
+          CRAVES_PAYMENT_ORDER_API_ENABLED=false \
+          RAZORPAY_API_ENABLED=false \
+          CRAVES_RAZORPAY_WEBHOOK_INGRESS_ENABLED=false \
+          RAZORPAY_PRODUCTION_PAYMENT_EXECUTION_ENABLED=false \
+          CASHFREE_API_ENABLED=false \
+          PAYMENT_PROVIDER_ENVIRONMENT=sandbox \
+          CRAVES_CASHFREE_PRODUCTION_ACTIVATION_APPROVED=false \
+          CRAVES_CASHFREE_WEBHOOK_INGRESS_ENABLED=false \
+          CRAVES_CASHFREE_WEBHOOK_WORKER_ENABLED=false \
+          CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED=false \
+          CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED=false \
+          CRAVES_REFUND_RECONCILIATION_ENABLED=false >/dev/null
+        echo 'Payment execution is fail-closed. Cashfree remains disabled.'

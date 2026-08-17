@@ -1,0 +1,53 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: craves-catalog-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/craves_business_db}
+    username: ${SPRING_DATASOURCE_USERNAME:cravesadmin}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE:5}
+      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MIN_IDLE:1}
+      connection-timeout: 30000
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    default-schema: catalog_schema
+    schemas: catalog_schema
+    table: flyway_schema_history
+  servlet:
+    multipart:
+      max-file-size: ${CRAVES_CATALOG_MAX_IMAGE_FILE_SIZE:8MB}
+      max-request-size: ${CRAVES_CATALOG_MAX_IMAGE_REQUEST_SIZE:10MB}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  health:
+    redis:
+      enabled: ${CRAVES_REDIS_HEALTH_ENABLED:false}
+
+craves:
+  jwt:
+    issuer: ${CRAVES_JWT_ISSUER:https://api.craves.in/auth}
+    audience: ${CRAVES_JWT_AUDIENCE:craves-api}
+    verification-pem-base64: ${CRAVES_JWT_VERIFICATION_PEM_BASE64:}
+  storage:
+    endpoint-value: ${CRAVES_STORAGE_ENDPOINT_VALUE:}
+    media-container: ${CRAVES_STORAGE_MEDIA_CONTAINER:media}
+    public-media-base-url: ${CRAVES_MEDIA_PUBLIC_BASE_URL:}
+    max-image-file-size-bytes: ${CRAVES_CATALOG_MAX_IMAGE_FILE_SIZE_BYTES:8388608}
+  discovery:
+    default-radius-km: ${CRAVES_DISCOVERY_DEFAULT_RADIUS_KM:10}
+    max-radius-km: ${CRAVES_DISCOVERY_MAX_RADIUS_KM:15}
+    max-query-radius-meters: ${CRAVES_DISCOVERY_MAX_QUERY_RADIUS_METERS:50000}
+    max-page-size: ${CRAVES_DISCOVERY_MAX_PAGE_SIZE:100}

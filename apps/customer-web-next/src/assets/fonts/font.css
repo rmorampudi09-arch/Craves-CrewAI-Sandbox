@@ -1,0 +1,20 @@
+/* ============================================================
+   CRAVES — FONT DEFINITIONS
+   This is the ONLY file you need to edit to change the fonts
+   used across the whole app.
+   ============================================================ */
+
+/* ============================================================
+   Global Font Variables
+   ============================================================ */
+
+:root {
+  /* Headings (Hero titles, Section titles, Dish names) */
+  --font-display-family: "Poppins", sans-serif;
+
+  /* Script Accents (Using Poppins as requested) */
+  --font-script-family: "Poppins", sans-serif;
+
+  /* Body Text (Paragraphs, Buttons, Labels, etc.) */
+  --font-sans-family: "Poppins", sans-serif;
+}

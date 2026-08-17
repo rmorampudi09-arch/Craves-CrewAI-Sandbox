@@ -1,0 +1,101 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: targetEnvironment
+    type: string
+    default: SANDBOX
+    values: [SANDBOX, PRODUCTION]
+  - name: confirmProductionSwitch
+    type: boolean
+    default: false
+  - name: enableRefundExecution
+    type: boolean
+    default: true
+
+variables:
+  AZURE_SERVICE_CONNECTION: Craves-Dev-Service-Connection
+  resourceGroup: rg-craves-prodlow-centralindia
+  containerApp: ca-craves-integration-service-pr
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+  - task: AzureCLI@2
+    displayName: Switch Cashfree off and Razorpay on
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        set +x
+        environment='${{ parameters.targetEnvironment }}'
+        production_confirm='${{ parameters.confirmProductionSwitch }}'
+        refund_enabled='${{ parameters.enableRefundExecution }}'
+        [[ "$environment" == SANDBOX || "$environment" == PRODUCTION ]] || { echo 'Invalid environment.' >&2; exit 2; }
+        if [[ "$environment" == PRODUCTION && "${production_confirm,,}" != true ]]; then
+          echo 'PRODUCTION requires confirmProductionSwitch=true.' >&2; exit 2
+        fi
+        suffix=sandbox; approved=false; execution=false
+        if [[ "$environment" == PRODUCTION ]]; then suffix=production; approved=true; execution=true; fi
+        key_id="razorpay-${suffix}-key-id"
+        key_secret="razorpay-${suffix}-key-secret"
+        webhook_secret="razorpay-${suffix}-webhook-secret"
+        secrets=$(az containerapp secret list -g '$(resourceGroup)' -n '$(containerApp)' --query '[].name' -o tsv --only-show-errors)
+        for secret in "$key_id" "$key_secret" "$webhook_secret"; do
+          grep -qx "$secret" <<<"$secrets" || { echo "Missing Container App secret reference $secret." >&2; exit 2; }
+        done
+        webhook_url='https://api.craves.in/api/v1/payments/webhooks/razorpay'
+        az containerapp update -g '$(resourceGroup)' -n '$(containerApp)' \
+          --remove-env-vars PAYMENT_PROVIDER_CLIENT_ID PAYMENT_PROVIDER_CLIENT_KEY \
+          --set-env-vars \
+          PAYMENT_PROVIDER_NAME=RAZORPAY \
+          CASHFREE_API_ENABLED=false \
+          PAYMENT_PROVIDER_ENVIRONMENT=sandbox \
+          CRAVES_CASHFREE_PRODUCTION_ACTIVATION_APPROVED=false \
+          RAZORPAY_API_ENABLED=true \
+          RAZORPAY_ENVIRONMENT="$environment" \
+          RAZORPAY_PRODUCTION_ACTIVATION_APPROVED="$approved" \
+          RAZORPAY_PRODUCTION_PAYMENT_EXECUTION_ENABLED="$execution" \
+          RAZORPAY_KEY_ID="secretref:${key_id}" \
+          RAZORPAY_KEY_SECRET="secretref:${key_secret}" \
+          RAZORPAY_WEBHOOK_SECRET="secretref:${webhook_secret}" \
+          RAZORPAY_WEBHOOK_URL="$webhook_url" \
+          RAZORPAY_AUTO_CAPTURE=true \
+          CRAVES_PAYMENT_ORDER_API_ENABLED=true \
+          CRAVES_RAZORPAY_WEBHOOK_INGRESS_ENABLED=true \
+          CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED=false \
+          CRAVES_CASHFREE_WEBHOOK_INGRESS_ENABLED=false \
+          CRAVES_CASHFREE_WEBHOOK_WORKER_ENABLED=false \
+          CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED="$refund_enabled" \
+          CRAVES_REFUND_RECONCILIATION_ENABLED="$refund_enabled" \
+          CRAVES_REFUND_PRODUCTION_PROVIDER_EXECUTION_APPROVED="$approved" \
+          CRAVES_REFUND_PRODUCTION_RECONCILIATION_APPROVED="$approved" >/dev/null
+        latest=$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query properties.latestRevisionName -o tsv --only-show-errors)
+        ready=''; replicas=0
+        for _ in $(seq 1 60); do
+          ready=$(az containerapp revision show -g '$(resourceGroup)' -n '$(containerApp)' --revision "$latest" --query properties.provisioningState -o tsv 2>/dev/null || true)
+          replicas=$(az containerapp revision show -g '$(resourceGroup)' -n '$(containerApp)' --revision "$latest" --query properties.replicas -o tsv 2>/dev/null || echo 0)
+          [[ "$ready" == Provisioned && "$replicas" -ge 1 ]] && break
+          sleep 10
+        done
+        [[ "$ready" == Provisioned && "$replicas" -ge 1 ]] || { echo 'Razorpay revision did not become healthy.' >&2; exit 2; }
+        fqdn=$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query properties.configuration.ingress.fqdn -o tsv)
+        payments_healthy=false
+        for _ in $(seq 1 12); do
+          if curl -fsS --max-time 30 "https://${fqdn}/actuator/health/payments" >/dev/null; then
+            payments_healthy=true
+            break
+          fi
+          sleep 5
+        done
+        [[ "$payments_healthy" == true ]] || { echo 'Razorpay payments health group did not become healthy.' >&2; exit 2; }
+        env_json=$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query 'properties.template.containers[0].env' -o json)
+        value() { jq -r --arg name "$1" '.[] | select(.name == $name) | .value' <<<"$env_json" | tail -1; }
+        [[ "$(value PAYMENT_PROVIDER_NAME)" == RAZORPAY ]]
+        [[ "$(value CASHFREE_API_ENABLED)" == false ]]
+        [[ "$(value RAZORPAY_ENVIRONMENT)" == "$environment" ]]
+        echo "Razorpay $environment is active; Cashfree API and webhook processing are disabled."

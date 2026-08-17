@@ -1,0 +1,1 @@
+Canonical subscription handover: `2026-08-11-subscription-production-completion.md`.

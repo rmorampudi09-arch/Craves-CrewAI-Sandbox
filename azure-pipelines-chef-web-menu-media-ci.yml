@@ -1,0 +1,33 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Build and test chef menu media
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-chef-menu-media-apim.sh
+      grep -q 'MAX_BYTES = 10_000_000' apps/customer-web-next/src/app/api/chef/menu/'[menuItemId]'/images/route.ts
+      grep -q 'sameOrigin' apps/customer-web-next/src/app/api/chef/menu/'[menuItemId]'/availability/route.ts
+      if grep -REn '(blobContainer|blobName|localStorage|sessionStorage|console\.(log|debug))' \
+        apps/customer-web-next/src/app/chef/menu/media \
+        apps/customer-web-next/src/components/chef-menu-media-manager.tsx \
+        apps/customer-web-next/src/app/api/chef/menu/'[menuItemId]'/images \
+        apps/customer-web-next/src/app/api/chef/menu/'[menuItemId]'/availability; then
+        echo 'ERROR: Menu media runtime exposes storage metadata or insecure behavior.' >&2
+        exit 1
+      fi
+      echo 'Chef menu media safety gates passed.'
+    displayName: Verify menu media safety gates

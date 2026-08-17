@@ -1,0 +1,32 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroupName
+    displayName: Azure resource group
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: authContainerAppName
+    displayName: Auth Service Container App
+    type: string
+    default: ca-craves-auth-service-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+  - task: AzureCLI@2
+    displayName: Read internal administrator RBAC status
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        set +x
+        resource_group='${{ parameters.resourceGroupName }}'
+        app='${{ parameters.authContainerAppName }}'
+        az containerapp show -g "$resource_group" -n "$app" \
+          --query "{app:name,runningStatus:properties.runningStatus,latestRevision:properties.latestRevisionName,latestReadyRevision:properties.latestReadyRevisionName,rbacApiEnabled:properties.template.containers[0].env[?name=='CRAVES_INTERNAL_ADMIN_RBAC_API_ENABLED'].value | [0]}" \
+          -o json --only-show-errors

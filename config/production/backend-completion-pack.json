@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "environment": "prodlow",
+  "targetConcurrency": "50-100 concurrent users",
+  "sourceVerificationOnlyByDefault": true,
+  "preserveRuntimeEnvironmentOnDeployment": true,
+  "externalProviderActivationDeferred": true,
+  "azure": {
+    "serviceConnection": "Craves-Dev-Service-Connection",
+    "resourceGroup": "rg-craves-prodlow-centralindia",
+    "location": "centralindia",
+    "containerRegistry": "cravesprodlowacr82121",
+    "containerRegistryLoginServer": "cravesprodlowacr82121.azurecr.io"
+  },
+  "services": [
+    {
+      "key": "auth",
+      "path": "services/auth-service",
+      "imageRepository": "craves/auth-service",
+      "containerApp": "ca-craves-auth-service-prodlow",
+      "deployOrder": 10,
+      "defaultFalseFlags": [
+        "CRAVES_INTERNAL_ADMIN_RBAC_API_ENABLED",
+        "CRAVES_ADMIN_ACCOUNT_INTERVENTION_API_ENABLED",
+        "CRAVES_ADMIN_ACCOUNT_INTERVENTION_FIREBASE_WORKER_ENABLED"
+      ]
+    },
+    {
+      "key": "notification",
+      "path": "services/notification-service",
+      "imageRepository": "craves/notification-service",
+      "containerApp": "ca-craves-notification-service-p",
+      "deployOrder": 20,
+      "defaultFalseFlags": [
+        "CRAVES_SERVICEBUS_ENABLED",
+        "CRAVES_NOTIFICATION_DELIVERY_WORKER_ENABLED",
+        "CRAVES_NOTIFICATION_PUSH_ENABLED",
+        "CRAVES_NOTIFICATION_EMAIL_ENABLED",
+        "CRAVES_NOTIFICATION_RECOVERY_API_ENABLED"
+      ]
+    },
+    {
+      "key": "userChef",
+      "path": "services/user-chef-service",
+      "imageRepository": "craves/user-chef-service",
+      "containerApp": "ca-craves-user-chef-service-prod",
+      "deployOrder": 30,
+      "defaultFalseFlags": []
+    },
+    {
+      "key": "catalog",
+      "path": "services/catalog-service",
+      "imageRepository": "craves/catalog-service",
+      "containerApp": "ca-craves-catalog-service-prodlo",
+      "deployOrder": 40,
+      "defaultFalseFlags": []
+    },
+    {
+      "key": "integration",
+      "path": "services/integration-service",
+      "imageRepository": "craves/integration-service",
+      "containerApp": "ca-craves-integration-service-pr",
+      "deployOrder": 50,
+      "defaultFalseFlags": [
+        "CRAVES_CASHFREE_PRODUCTION_ACTIVATION_APPROVED",
+        "CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED",
+        "CRAVES_DELIVERY_INTELLIGENCE_ENABLED",
+        "CRAVES_DELIVERY_COMMAND_ENABLED",
+        "CRAVES_DELIVERY_RECONCILIATION_ENABLED",
+        "CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED",
+        "CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED",
+        "CRAVES_DELIVERY_STATUS_PUBLISHER_ENABLED",
+        "CRAVES_REFUND_CONSUMER_ENABLED",
+        "CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED",
+        "CRAVES_REFUND_RECONCILIATION_ENABLED",
+        "CRAVES_REFUND_STATUS_PUBLISHER_ENABLED",
+        "CRAVES_REFUND_PRODUCTION_PROVIDER_EXECUTION_APPROVED",
+        "CRAVES_REFUND_PRODUCTION_RECONCILIATION_APPROVED",
+        "CRAVES_SUBSCRIPTION_PAYMENT_CONSUMER_ENABLED",
+        "CRAVES_SUBSCRIPTION_PAYMENT_STATUS_PUBLISHER_ENABLED",
+        "BORZO_API_ENABLED",
+        "BORZO_PRODUCTION_ACTIVATION_APPROVED"
+      ]
+    },
+    {
+      "key": "subscription",
+      "path": "services/subscription-service",
+      "imageRepository": "craves/subscription-service",
+      "containerApp": "ca-craves-subscription-service-p",
+      "deployOrder": 60,
+      "defaultFalseFlags": [
+        "CRAVES_SUBSCRIPTION_OCCURRENCE_GENERATOR_ENABLED",
+        "CRAVES_SUBSCRIPTION_BILLING_GENERATOR_ENABLED",
+        "CRAVES_SUBSCRIPTION_BILLING_PUBLISHER_ENABLED",
+        "CRAVES_SUBSCRIPTION_PAYMENT_STATUS_CONSUMER_ENABLED",
+        "CRAVES_SUBSCRIPTION_ORDER_REQUEST_WORKER_ENABLED",
+        "CRAVES_SUBSCRIPTION_ORDER_PUBLISHER_ENABLED"
+      ]
+    },
+    {
+      "key": "order",
+      "path": "services/order-service",
+      "imageRepository": "craves/order-service",
+      "containerApp": "ca-craves-order-service-prodlow",
+      "deployOrder": 70,
+      "defaultFalseFlags": [
+        "CRAVES_LAUNCH_POLICY_ENFORCEMENT_ENABLED",
+        "CRAVES_REFUND_STATUS_CONSUMER_ENABLED",
+        "CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED",
+        "CRAVES_SUBSCRIPTION_ORDER_CONSUMER_ENABLED",
+        "CRAVES_SUBSCRIPTION_ORDER_CALLBACK_WORKER_ENABLED"
+      ]
+    }
+  ],
+  "deploymentSafety": {
+    "imageReference": "repository digest from the current pipeline run",
+    "environmentPolicy": "preserve every existing Container App environment value and secret reference",
+    "rollbackPolicy": "roll back every updated service in reverse order if any service fails readiness or health",
+    "databasePolicy": "require a verified pre-deployment database backup because Flyway migrations are forward-only",
+    "providerPolicy": "do not activate Cashfree production, delivery, refund, FCM, ACS Email, recurring-subscription workers, or internal administrator RBAC before guarded activation"
+  }
+}

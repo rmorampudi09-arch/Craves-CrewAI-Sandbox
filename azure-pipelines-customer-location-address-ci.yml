@@ -1,0 +1,92 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    fetchDepth: 1
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - script: |
+      set -euo pipefail
+      cd services/user-chef-service
+      mvn -B clean test
+    displayName: Verify User-Chef address contract and Flyway migration
+
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: 24.x
+
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm ci --no-audit --no-fund
+      npm run lint
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Verify customer web location experience
+    env:
+      CRAVES_API_BASE_URL: https://api.craves.in/api/v1
+      AZURE_MAPS_CLIENT_ID: 00000000-0000-0000-0000-000000000000
+      AZURE_MAPS_ENDPOINT: https://atlas.microsoft.com
+      NEXT_PUBLIC_FIREBASE_API_KEY: ci-placeholder
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ci.example.invalid
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: craves-ci
+      NEXT_PUBLIC_FIREBASE_APP_ID: 1:1:web:ci
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '1'
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: craves-ci.invalid
+      NEXT_PUBLIC_CASHFREE_MODE: sandbox
+      NEXT_PUBLIC_CRAVES_ALLOW_CATALOG_FALLBACK: 'false'
+
+  - script: |
+      set -euo pipefail
+      bash -n scripts/release/customer-location-azure-maps-provision.sh
+      bash -n scripts/release/customer-location-runtime-smoke.sh
+
+      TARGETS=(
+        apps/customer-web-next/src/components/customer-addresses.tsx
+        apps/customer-web-next/src/screens/Profile/Addresses.tsx
+        apps/customer-web-next/src/components/checkout/CheckoutAddressDialog.tsx
+        apps/customer-web-next/src/components/layout/LocationModal.tsx
+        apps/customer-web-next/src/screens/public/BrowseFoods/BrowseFoods.tsx
+        apps/customer-web-next/src/components/chef-application-workspace.tsx
+        apps/customer-web-next/src/components/chef-kitchen-form.tsx
+        apps/customer-web-next/src/components/chef-mode-dashboard.tsx
+        apps/customer-web-next/src/components/chef-operations-workspace.tsx
+        apps/customer-web-next/src/components/discovery-browser.tsx
+      )
+
+      if grep -nE 'aria-label="(Latitude|Longitude)"|>Latitude<|>Longitude<|"Latitude"[[:space:]]*,|"Longitude"[[:space:]]*,' "${TARGETS[@]}"; then
+        echo 'ERROR: A customer/chef-facing coordinate input label was reintroduced.' >&2
+        exit 1
+      fi
+
+      if grep -nE '\{[^}]*\.(latitude|longitude)\?*\.toFixed|\{[^}]*\.(latitude|longitude)[^}]*\},[[:space:]]*\{[^}]*\.(latitude|longitude)' \
+        apps/customer-web-next/src/components/chef-mode-dashboard.tsx \
+        apps/customer-web-next/src/components/chef-operations-workspace.tsx; then
+        echo 'ERROR: Raw kitchen coordinates were reintroduced into chef-visible JSX.' >&2
+        exit 1
+      fi
+
+      grep -q 'resolveLiveBrowsingLocation' apps/customer-web-next/src/screens/public/BrowseFoods/BrowseFoods.tsx
+      grep -q 'liveWithoutAddress' apps/customer-web-next/src/screens/public/BrowseFoods/BrowseFoods.tsx
+      grep -q 'parseLocationRecommendation' apps/customer-web-next/src/screens/public/BrowseFoods/BrowseFoods.tsx
+      grep -q 'reverseGeocodeCurrentLocation' apps/customer-web-next/src/screens/public/BrowseFoods/BrowseFoods.tsx
+      grep -q 'RATE_LIMIT_REQUESTS = 30' apps/customer-web-next/src/app/api/location/reverse-geocode/route.ts
+      grep -q 'disable-local-auth true' scripts/release/customer-location-azure-maps-provision.sh
+      grep -q 'Azure Maps Data Reader' scripts/release/customer-location-azure-maps-provision.sh
+      grep -q 'confirmBillableAzureMapsProvision' azure-pipelines-customer-location-azure-maps.yml
+      grep -q 'customer-location-runtime-smoke.sh' azure-pipelines-customer-location-runtime-smoke.yml
+      grep -q 'POST /api/location/reverse-geocode' apps/customer-web-next/src/services/location/README.md
+    displayName: Verify location security and billing guards

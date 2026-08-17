@@ -1,0 +1,1 @@
+Subscription production-completion summary is maintained in `docs/handover/2026-08-11-subscription-production-completion.md`.

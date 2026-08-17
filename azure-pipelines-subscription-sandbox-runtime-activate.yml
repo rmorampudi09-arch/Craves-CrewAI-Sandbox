@@ -1,0 +1,77 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmSandboxActivation
+    displayName: Confirm enabling Subscription runtime with Cashfree SANDBOX only
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: subscriptionContainerAppName
+    type: string
+    default: ca-craves-subscription-service-p
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: serviceBusNamespace
+    type: string
+    default: sb-craves-prodlow-l3ing6
+  - name: serviceBusFqns
+    type: string
+    default: sb-craves-prodlow-l3ing6.servicebus.windows.net
+  - name: serviceBusTopic
+    type: string
+    default: craves-domain-events
+  - name: apimName
+    type: string
+    default: apim-craves-prodlow-l3ing6
+  - name: apimHost
+    type: string
+    default: api.craves.in
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - bash: |
+      set -euo pipefail
+      CONFIRM='${{ parameters.confirmSandboxActivation }}'
+      [[ "${CONFIRM,,}" == "true" ]] || { echo 'ERROR: confirmSandboxActivation must be true.' >&2; exit 1; }
+      echo 'Explicit Cashfree SANDBOX activation confirmation: PASS'
+    displayName: Require explicit sandbox activation confirmation
+
+  - task: AzureCLI@2
+    displayName: Activate Subscription runtime downstream-first
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: scripts/release/subscription-sandbox-runtime-activate.sh
+    env:
+      RESOURCE_GROUP: ${{ parameters.resourceGroupName }}
+      SUBSCRIPTION_APP: ${{ parameters.subscriptionContainerAppName }}
+      INTEGRATION_APP: ${{ parameters.integrationContainerAppName }}
+      ORDER_APP: ${{ parameters.orderContainerAppName }}
+      SERVICE_BUS_NAMESPACE: ${{ parameters.serviceBusNamespace }}
+      SERVICE_BUS_FQNS: ${{ parameters.serviceBusFqns }}
+      SERVICE_BUS_TOPIC: ${{ parameters.serviceBusTopic }}
+      APIM_NAME: ${{ parameters.apimName }}
+      APIM_HOST: ${{ parameters.apimHost }}
+      CONFIRM_SUBSCRIPTION_SANDBOX_ACTIVATION: ${{ parameters.confirmSandboxActivation }}
+      ACTIVATION_ID: $(Build.BuildId)
+      SNAPSHOT_FILE: $(Build.ArtifactStagingDirectory)/subscription-sandbox-preactivation.json
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish non-secret pre-activation snapshot
+    condition: always()
+    inputs:
+      targetPath: $(Build.ArtifactStagingDirectory)
+      artifact: subscription-sandbox-activation-evidence
+      publishLocation: pipeline

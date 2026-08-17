@@ -1,0 +1,1 @@
+Temporary runbook marker for the v2 Order delivery-status activation helper. The helper is validated by Backend completion CI because it lives under scripts/release/.

@@ -1,0 +1,167 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: resourceGroup
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: acrName
+    type: string
+    default: cravesprodlowacr82121
+  - name: containerAppName
+    type: string
+    default: ca-craves-web-prodlow
+  - name: imageTag
+    type: string
+    default: $(Build.BuildId)
+
+variables:
+  modulePath: apps/api-test-dashboard
+  imageRepository: craves/api-test-dashboard
+  azureServiceConnection: $(AZURE_SERVICE_CONNECTION)
+  dashboardBaseUrl: https://ca-craves-web-prodlow.happysand-aedc7165.centralindia.azurecontainerapps.io
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: AzureCLI@2
+    displayName: Build and push Craves API Test Dashboard image
+    inputs:
+      azureSubscription: $(azureServiceConnection)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        python3 - <<'PY'
+        from pathlib import Path
+
+        page = Path("apps/api-test-dashboard/app/page.tsx")
+        text = page.read_text()
+
+        old_profile = '''const DEFAULT_PROFILE_PAYLOAD = `{\n  "displayName": "Raviteja Test Customer",\n  "email": "raviteja.test@example.com"\n}`;'''
+        final_profile = '''const DEFAULT_PROFILE_PAYLOAD = `{\n  "firstName": "Raviteja",\n  "lastName": "Morampudi",\n  "displayName": "Raviteja Test Customer",\n  "contactPhoneNumber": "+918019166645",\n  "email": "raviteja.test@example.com"\n}`;'''
+        old_address = '''const DEFAULT_ADDRESS_PAYLOAD = `{\n  "label": "Home",\n  "line1": "Test address line 1",\n  "line2": "Test address line 2",\n  "city": "Hyderabad",\n  "state": "Telangana",\n  "postalCode": "500001",\n  "latitude": 17.385,\n  "longitude": 78.4867,\n  "isDefault": true\n}`;'''
+        final_address = '''const DEFAULT_ADDRESS_PAYLOAD = `{\n  "recipientName": "Raviteja Morampudi",\n  "contactPhoneNumber": "+918019166645",\n  "addressLabel": "WORK",\n  "addressLine1": "Test address line 1",\n  "addressLine2": "Test address line 2",\n  "city": "Hyderabad",\n  "state": "Telangana",\n  "postalCode": "500001",\n  "latitude": 17.385,\n  "longitude": 78.4867,\n  "isDefault": true\n}`;'''
+
+        text = text.replace(old_profile, final_profile)
+        text = text.replace(old_address, final_address)
+
+        state_marker = '  const [addressId, setAddressId] = useState("");\n'
+        state_insert = '''  const [catalogResponse, setCatalogResponse] = useState<unknown>(null);\n  const [catalogKitchenId, setCatalogKitchenId] = useState("");\n  const [catalogMenuItemId, setCatalogMenuItemId] = useState("");\n  const [chefKitchenResponse, setChefKitchenResponse] = useState<unknown>(null);\n  const [chefMenuItemId, setChefMenuItemId] = useState("");\n  const [chefKitchenPayload, setChefKitchenPayload] = useState(`{\n  "kitchenName": "Craves Test Kitchen",\n  "description": "Internal dashboard test kitchen",\n  "contactPhoneNumber": "+918019166645",\n  "addressLine1": "Test kitchen address line 1",\n  "addressLine2": "Test kitchen address line 2",\n  "city": "Hyderabad",\n  "state": "Telangana",\n  "postalCode": "500001",\n  "latitude": 17.385,\n  "longitude": 78.4867\n}`);\n  const [chefMenuItemPayload, setChefMenuItemPayload] = useState(`{\n  "name": "Dashboard Test Meal",\n  "description": "Internal dashboard test menu item",\n  "category": "MEALS",\n  "price": 199,\n  "available": true,\n  "vegetarian": true\n}`);\n  const [availabilityPayload, setAvailabilityPayload] = useState(`{\n  "available": true\n}`);\n'''
+        if "const [catalogResponse, setCatalogResponse]" not in text:
+          if state_marker not in text:
+            raise SystemExit("State insertion marker not found")
+          text = text.replace(state_marker, state_marker + state_insert)
+
+        function_marker = '  function copyValue(label: string, value: string): void {\n'
+        function_insert = '''  async function runDashboardApi(\n    title: string,\n    path: string,\n    options: RequestInit,\n    onSuccess?: (body: unknown) => void\n  ): Promise<void> {\n    setBusy(true);\n    setStatus({ type: "idle", message: `${title} in progress...` });\n\n    try {\n      const result = await callCravesApi(path, options);\n      if (onSuccess) {\n        onSuccess(result.body);\n      }\n      setStatus(result.ok\n        ? { type: "ok", message: `${title} succeeded with HTTP ${result.status}.` }\n        : { type: "error", message: `${title} failed with HTTP ${result.status}.` }\n      );\n      addLog(title, result);\n    } catch (error) {\n      const message = error instanceof Error ? error.message : `${title} failed.`;\n      setStatus({ type: "error", message });\n      addLog(`${title} Failed`, message);\n    } finally {\n      setBusy(false);\n    }\n  }\n\n  async function listCatalogKitchens(): Promise<void> {\n    await runDashboardApi("Catalog List Kitchens", "/api/v1/catalog/kitchens", { method: "GET" }, (body) => {\n      setCatalogResponse(body);\n      const firstKitchenId = readFirstAddressId(body);\n      if (firstKitchenId) {\n        setCatalogKitchenId(firstKitchenId);\n      }\n    });\n  }\n\n  async function getCatalogKitchen(): Promise<void> {\n    if (!catalogKitchenId.trim()) {\n      setStatus({ type: "error", message: "Kitchen ID is required." });\n      return;\n    }\n    await runDashboardApi("Catalog Get Kitchen", `/api/v1/catalog/kitchens/${catalogKitchenId.trim()}`, { method: "GET" }, setCatalogResponse);\n  }\n\n  async function listCatalogKitchenMenuItems(): Promise<void> {\n    if (!catalogKitchenId.trim()) {\n      setStatus({ type: "error", message: "Kitchen ID is required." });\n      return;\n    }\n    await runDashboardApi("Catalog List Kitchen Menu Items", `/api/v1/catalog/kitchens/${catalogKitchenId.trim()}/menu-items`, { method: "GET" }, (body) => {\n      setCatalogResponse(body);\n      const firstMenuItemId = readFirstAddressId(body);\n      if (firstMenuItemId) {\n        setCatalogMenuItemId(firstMenuItemId);\n      }\n    });\n  }\n\n  async function getCatalogMenuItem(): Promise<void> {\n    if (!catalogMenuItemId.trim()) {\n      setStatus({ type: "error", message: "Catalog menu item ID is required." });\n      return;\n    }\n    await runDashboardApi("Catalog Get Menu Item", `/api/v1/catalog/menu-items/${catalogMenuItemId.trim()}`, { method: "GET" }, setCatalogResponse);\n  }\n\n  async function getMyKitchen(): Promise<void> {\n    await runDashboardApi("Kitchen Get My Kitchen", "/api/v1/kitchens/me", { method: "GET" }, setChefKitchenResponse);\n  }\n\n  async function updateMyKitchen(): Promise<void> {\n    let payload: unknown;\n    try {\n      payload = parseJsonPayload(chefKitchenPayload, "Kitchen payload");\n    } catch (error) {\n      const message = error instanceof Error ? error.message : "Kitchen payload is invalid.";\n      setStatus({ type: "error", message });\n      addLog("Kitchen Payload Invalid", message);\n      return;\n    }\n\n    await runDashboardApi("Kitchen Update My Kitchen", "/api/v1/kitchens/me", {\n      method: "PUT",\n      body: JSON.stringify(payload)\n    }, setChefKitchenResponse);\n  }\n\n  async function listMyMenuItems(): Promise<void> {\n    await runDashboardApi("Kitchen List My Menu Items", "/api/v1/kitchens/me/menu-items", { method: "GET" }, (body) => {\n      setChefKitchenResponse(body);\n      const firstMenuItemId = readFirstAddressId(body);\n      if (firstMenuItemId) {\n        setChefMenuItemId(firstMenuItemId);\n      }\n    });\n  }\n\n  async function createMyMenuItem(): Promise<void> {\n    let payload: unknown;\n    try {\n      payload = parseJsonPayload(chefMenuItemPayload, "Menu item payload");\n    } catch (error) {\n      const message = error instanceof Error ? error.message : "Menu item payload is invalid.";\n      setStatus({ type: "error", message });\n      addLog("Menu Item Payload Invalid", message);\n      return;\n    }\n\n    await runDashboardApi("Kitchen Create Menu Item", "/api/v1/kitchens/me/menu-items", {\n      method: "POST",\n      body: JSON.stringify(payload)\n    }, (body) => {\n      setChefKitchenResponse(body);\n      const newMenuItemId = readFirstAddressId(body);\n      if (newMenuItemId) {\n        setChefMenuItemId(newMenuItemId);\n      }\n    });\n  }\n\n  async function updateMyMenuItem(): Promise<void> {\n    if (!chefMenuItemId.trim()) {\n      setStatus({ type: "error", message: "Chef menu item ID is required for update." });\n      return;\n    }\n\n    let payload: unknown;\n    try {\n      payload = parseJsonPayload(chefMenuItemPayload, "Menu item payload");\n    } catch (error) {\n      const message = error instanceof Error ? error.message : "Menu item payload is invalid.";\n      setStatus({ type: "error", message });\n      addLog("Menu Item Payload Invalid", message);\n      return;\n    }\n\n    await runDashboardApi("Kitchen Update Menu Item", `/api/v1/kitchens/me/menu-items/${chefMenuItemId.trim()}`, {\n      method: "PUT",\n      body: JSON.stringify(payload)\n    }, setChefKitchenResponse);\n  }\n\n  async function updateMyMenuItemAvailability(): Promise<void> {\n    if (!chefMenuItemId.trim()) {\n      setStatus({ type: "error", message: "Chef menu item ID is required for availability update." });\n      return;\n    }\n\n    let payload: unknown;\n    try {\n      payload = parseJsonPayload(availabilityPayload, "Availability payload");\n    } catch (error) {\n      const message = error instanceof Error ? error.message : "Availability payload is invalid.";\n      setStatus({ type: "error", message });\n      addLog("Availability Payload Invalid", message);\n      return;\n    }\n\n    await runDashboardApi("Kitchen Update Menu Item Availability", `/api/v1/kitchens/me/menu-items/${chefMenuItemId.trim()}/availability`, {\n      method: "PATCH",\n      body: JSON.stringify(payload)\n    }, setChefKitchenResponse);\n  }\n\n'''
+        if "async function listCatalogKitchens" not in text:
+          if function_marker not in text:
+            raise SystemExit("Function insertion marker not found")
+          text = text.replace(function_marker, function_insert + function_marker)
+
+        jsx_marker = '''      <section className="grid">\n        <div className="card">\n          <h2>6. Notifications</h2>'''
+        jsx_insert = '''      <section className="grid">\n        <div className="card">\n          <h2>6. Catalog / Customer Browse APIs</h2>\n          <p className="small">\n            Public customer-side catalog tests through APIM: list kitchens, get kitchen details, list menu items, and get menu item details.\n          </p>\n          <div className="field">\n            <label htmlFor="catalogKitchenId">Kitchen ID</label>\n            <input id="catalogKitchenId" value={catalogKitchenId} onChange={(event) => setCatalogKitchenId(event.target.value)} placeholder="Auto-filled from List Kitchens if response has id" />\n          </div>\n          <div className="field">\n            <label htmlFor="catalogMenuItemId">Catalog Menu Item ID</label>\n            <input id="catalogMenuItemId" value={catalogMenuItemId} onChange={(event) => setCatalogMenuItemId(event.target.value)} placeholder="Auto-filled from List Menu Items if response has id" />\n          </div>\n          <div className="button-row">\n            <button type="button" onClick={listCatalogKitchens} disabled={busy || !cravesAccessToken}>List Kitchens</button>\n            <button type="button" className="secondary" onClick={getCatalogKitchen} disabled={busy || !cravesAccessToken || !catalogKitchenId}>Get Kitchen</button>\n            <button type="button" className="ghost" onClick={listCatalogKitchenMenuItems} disabled={busy || !cravesAccessToken || !catalogKitchenId}>List Menu Items</button>\n            <button type="button" className="ghost" onClick={getCatalogMenuItem} disabled={busy || !cravesAccessToken || !catalogMenuItemId}>Get Menu Item</button>\n          </div>\n          <pre>{catalogResponse ? formatJson(catalogResponse) : "No catalog response yet."}</pre>\n        </div>\n\n        <div className="card">\n          <h2>7. Chef Kitchen / Menu APIs</h2>\n          <p className="small">\n            Chef-side kitchen and menu tests. Image upload is intentionally excluded because Blob/CDN media setup is still pending.\n          </p>\n          <div className="field">\n            <label htmlFor="chefKitchenPayload">PUT /api/v1/kitchens/me payload</label>\n            <textarea id="chefKitchenPayload" value={chefKitchenPayload} onChange={(event) => setChefKitchenPayload(event.target.value)} />\n          </div>\n          <div className="field">\n            <label htmlFor="chefMenuItemPayload">Menu item payload</label>\n            <textarea id="chefMenuItemPayload" value={chefMenuItemPayload} onChange={(event) => setChefMenuItemPayload(event.target.value)} />\n          </div>\n          <div className="field">\n            <label htmlFor="chefMenuItemId">Chef Menu Item ID</label>\n            <input id="chefMenuItemId" value={chefMenuItemId} onChange={(event) => setChefMenuItemId(event.target.value)} placeholder="Auto-filled from create/list if response has id" />\n          </div>\n          <div className="field">\n            <label htmlFor="availabilityPayload">PATCH availability payload</label>\n            <textarea id="availabilityPayload" value={availabilityPayload} onChange={(event) => setAvailabilityPayload(event.target.value)} />\n          </div>\n          <div className="button-row">\n            <button type="button" onClick={getMyKitchen} disabled={busy || !cravesAccessToken}>Get My Kitchen</button>\n            <button type="button" className="secondary" onClick={updateMyKitchen} disabled={busy || !cravesAccessToken}>Update My Kitchen</button>\n            <button type="button" className="ghost" onClick={listMyMenuItems} disabled={busy || !cravesAccessToken}>List My Menu Items</button>\n            <button type="button" className="ghost" onClick={createMyMenuItem} disabled={busy || !cravesAccessToken}>Create Menu Item</button>\n            <button type="button" className="ghost" onClick={updateMyMenuItem} disabled={busy || !cravesAccessToken || !chefMenuItemId}>Update Menu Item</button>\n            <button type="button" className="ghost" onClick={updateMyMenuItemAvailability} disabled={busy || !cravesAccessToken || !chefMenuItemId}>Update Availability</button>\n          </div>\n          <pre>{chefKitchenResponse ? formatJson(chefKitchenResponse) : "No kitchen/menu response yet."}</pre>\n        </div>\n      </section>\n\n'''
+        if "Catalog / Customer Browse APIs" not in text:
+          if jsx_marker not in text:
+            raise SystemExit("JSX insertion marker not found")
+          text = text.replace(jsx_marker, jsx_insert + jsx_marker)
+
+        page.write_text(text)
+        print("Patched dashboard with customer payload defaults plus catalog/kitchen API test panels.")
+        PY
+
+        ACR_LOGIN_SERVER=$(az acr show \
+          --name "${{ parameters.acrName }}" \
+          --resource-group "${{ parameters.resourceGroup }}" \
+          --query loginServer \
+          -o tsv)
+
+        IMAGE="${ACR_LOGIN_SERVER}/$(imageRepository):${{ parameters.imageTag }}"
+        echo "Building ${IMAGE}"
+
+        az acr login --name "${{ parameters.acrName }}"
+
+        docker build \
+          -f "$(modulePath)/Dockerfile" \
+          --build-arg NEXT_PUBLIC_FIREBASE_API_KEY="$(NEXT_PUBLIC_FIREBASE_API_KEY)" \
+          --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="$(NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)" \
+          --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID="$(NEXT_PUBLIC_FIREBASE_PROJECT_ID)" \
+          --build-arg NEXT_PUBLIC_FIREBASE_APP_ID="$(NEXT_PUBLIC_FIREBASE_APP_ID)" \
+          --build-arg NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET="$(NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)" \
+          --build-arg NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID="$(NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)" \
+          --build-arg NEXT_PUBLIC_APIM_BASE_URL="$(dashboardBaseUrl)" \
+          -t "${IMAGE}" \
+          "$(modulePath)"
+
+        docker push "${IMAGE}"
+
+  - task: AzureCLI@2
+    displayName: Deploy Craves API Test Dashboard to existing web Container App
+    inputs:
+      azureSubscription: $(azureServiceConnection)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        ACR_LOGIN_SERVER=$(az acr show \
+          --name "${{ parameters.acrName }}" \
+          --resource-group "${{ parameters.resourceGroup }}" \
+          --query loginServer \
+          -o tsv)
+
+        IMAGE="${ACR_LOGIN_SERVER}/$(imageRepository):${{ parameters.imageTag }}"
+        echo "Deploying ${IMAGE} to ${{ parameters.containerAppName }}"
+
+        az containerapp ingress update \
+          --name "${{ parameters.containerAppName }}" \
+          --resource-group "${{ parameters.resourceGroup }}" \
+          --type external \
+          --target-port 3000 \
+          --transport auto \
+          -o table
+
+        az containerapp update \
+          --name "${{ parameters.containerAppName }}" \
+          --resource-group "${{ parameters.resourceGroup }}" \
+          --image "${IMAGE}" \
+          --set-env-vars \
+            NODE_ENV=production \
+            PORT=3000 \
+            NEXT_PUBLIC_FIREBASE_API_KEY="$(NEXT_PUBLIC_FIREBASE_API_KEY)" \
+            NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="$(NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)" \
+            NEXT_PUBLIC_FIREBASE_PROJECT_ID="$(NEXT_PUBLIC_FIREBASE_PROJECT_ID)" \
+            NEXT_PUBLIC_FIREBASE_APP_ID="$(NEXT_PUBLIC_FIREBASE_APP_ID)" \
+            NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET="$(NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)" \
+            NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID="$(NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)" \
+            NEXT_PUBLIC_APIM_BASE_URL="$(dashboardBaseUrl)" \
+          -o table
+
+        WEB_FQDN=$(az containerapp ingress show \
+          --name "${{ parameters.containerAppName }}" \
+          --resource-group "${{ parameters.resourceGroup }}" \
+          --query fqdn \
+          -o tsv)
+
+        echo ""
+        echo "Craves API Test Dashboard URL: https://${WEB_FQDN}"
+        echo "Firebase Authorized domain must include: ${WEB_FQDN}"
+        echo "Dashboard same-origin API proxy is enabled for /api/v1/* routes."
+
+  - task: AzureCLI@2
+    displayName: Show latest web app logs
+    condition: always()
+    inputs:
+      azureSubscription: $(azureServiceConnection)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az containerapp logs show \
+          --name "${{ parameters.containerAppName }}" \
+          --resource-group "${{ parameters.resourceGroup }}" \
+          --tail 120 || true

@@ -1,0 +1,33 @@
+trigger: none
+
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+- name: environmentName
+  displayName: Environment
+  type: string
+  default: dev
+  values:
+  - dev
+  - stage
+  - prod
+
+variables:
+  resourceGroupName: rg-craves-${{ parameters.environmentName }}
+  location: centralindia
+
+steps:
+- task: AzureCLI@2
+  displayName: Deploy Craves Infrastructure
+  inputs:
+    azureSubscription: 'sc-craves-dev'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      az group create -n $(resourceGroupName) -l $(location)
+      az deployment group create \
+        -g $(resourceGroupName) \
+        -f infra/main.bicep \
+        -p environmentName=${{ parameters.environmentName }} \
+        -p postgresAdminPassword='$(POSTGRES_ADMIN_PASSWORD)'

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.craves.in/events/delivery-status-changed-v1.schema.json",
+  "title": "DELIVERY_STATUS_CHANGED v1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "correlationId",
+    "source",
+    "subject",
+    "data"
+  ],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "const": "DELIVERY_STATUS_CHANGED" },
+    "eventVersion": { "const": "1.0" },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "correlationId": { "type": "string", "format": "uuid" },
+    "causationId": {
+      "type": ["string", "null"],
+      "format": "uuid"
+    },
+    "source": { "const": "integration-service" },
+    "subject": {
+      "type": "string",
+      "pattern": "^delivery-job/[0-9a-fA-F-]{36}$"
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deliveryJobId",
+        "orderId",
+        "chefSubOrderId",
+        "providerId",
+        "providerDeliveryId",
+        "status",
+        "observedAt"
+      ],
+      "properties": {
+        "deliveryJobId": { "type": "string", "format": "uuid" },
+        "orderId": { "type": "string", "format": "uuid" },
+        "chefSubOrderId": { "type": "string", "format": "uuid" },
+        "providerId": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "providerDeliveryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "status": {
+          "enum": [
+            "PENDING",
+            "SEARCHING",
+            "COURIER_ASSIGNED",
+            "COURIER_TO_PICKUP",
+            "AT_PICKUP",
+            "PICKED_UP",
+            "IN_TRANSIT",
+            "AT_DROPOFF",
+            "DELIVERED",
+            "CANCELLED",
+            "DELAYED",
+            "RETURNING",
+            "RETURNED",
+            "FAILED"
+          ]
+        },
+        "trackingUrl": {
+          "type": ["string", "null"],
+          "format": "uri"
+        },
+        "observedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  appPath: apps/customer-web-next
+
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: '24.x'
+  - script: |
+      set -euo pipefail
+      cd "$(appPath)"
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Typecheck, test and build customer discovery
+  - script: |
+      set -euo pipefail
+      grep -q 'navigator.geolocation' apps/customer-web-next/src/components/discovery-browser.tsx
+      grep -q 'url.protocol === "https:"' apps/customer-web-next/src/lib/discovery-contract.ts
+      grep -q 'Cache-Control.*no-store' apps/customer-web-next/src/app/api/discovery/kitchens/route.ts
+      if grep -REn '(phoneNumber|email|identityId|kitchenLatitude|kitchenLongitude)' apps/customer-web-next/src/components/discovery-browser.tsx; then
+        echo 'ERROR: Discovery UI references private catalog fields.' >&2
+        exit 1
+      fi
+      echo 'Discovery privacy and location controls passed.'
+    displayName: Verify location and catalog privacy controls

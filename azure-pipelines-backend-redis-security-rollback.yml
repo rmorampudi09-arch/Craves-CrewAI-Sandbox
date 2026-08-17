@@ -1,0 +1,112 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmation
+    type: string
+    default: NOT_APPROVED
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: authContainerAppName
+    type: string
+    default: ca-craves-auth-service-prodlow
+  - name: userChefContainerAppName
+    type: string
+    default: ca-craves-user-chef-service-prod
+  - name: catalogContainerAppName
+    type: string
+    default: ca-craves-catalog-service-prodlo
+  - name: orderContainerAppName
+    type: string
+    default: ca-craves-order-service-prodlow
+  - name: subscriptionContainerAppName
+    type: string
+    default: ca-craves-subscription-service-p
+  - name: integrationContainerAppName
+    type: string
+    default: ca-craves-integration-service-pr
+  - name: notificationContainerAppName
+    type: string
+    default: ca-craves-notification-service-p
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - task: AzureCLI@2
+    displayName: Return Redis security controls to disabled state
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        if [[ '${{ parameters.confirmation }}' != 'APPROVE_REDIS_SECURITY_ROLLBACK' ]]; then
+          echo 'Explicit Redis security rollback confirmation is required.' >&2
+          exit 1
+        fi
+
+        RG='${{ parameters.resourceGroupName }}'
+        AUTH='${{ parameters.authContainerAppName }}'
+        apps=(
+          "$AUTH"
+          '${{ parameters.userChefContainerAppName }}'
+          '${{ parameters.catalogContainerAppName }}'
+          '${{ parameters.orderContainerAppName }}'
+          '${{ parameters.subscriptionContainerAppName }}'
+          '${{ parameters.integrationContainerAppName }}'
+          '${{ parameters.notificationContainerAppName }}'
+        )
+
+        read_env_value() {
+          local app="$1" name="$2"
+          az containerapp show -g "$RG" -n "$app" \
+            --query "properties.template.containers[0].env[?name=='$name']|[0].value" -o tsv
+        }
+
+        wait_disabled() {
+          local app="$1" name="$2"
+          local latest ready running actual
+          for attempt in $(seq 1 60); do
+            latest=$(az containerapp show -g "$RG" -n "$app" --query properties.latestRevisionName -o tsv)
+            ready=$(az containerapp show -g "$RG" -n "$app" --query properties.latestReadyRevisionName -o tsv)
+            running=$(az containerapp show -g "$RG" -n "$app" --query properties.runningStatus -o tsv)
+            actual=$(read_env_value "$app" "$name")
+            echo "Attempt $attempt/60 app=$app latest=$latest ready=$ready running=$running $name=$actual"
+            if [[ -n "$latest" && "$latest" == "$ready" && "$running" == 'Running' && "${actual,,}" == 'false' ]]; then
+              return 0
+            fi
+            sleep 10
+          done
+          echo "ERROR: $app did not become ready with $name=false." >&2
+          exit 1
+        }
+
+        az containerapp update \
+          --resource-group "$RG" \
+          --name "$AUTH" \
+          --set-env-vars CRAVES_AUTH_RATE_LIMIT_ENABLED=false \
+          --output none
+        wait_disabled "$AUTH" CRAVES_AUTH_RATE_LIMIT_ENABLED
+
+        for app in "${apps[@]}"; do
+          az containerapp update \
+            --resource-group "$RG" \
+            --name "$app" \
+            --set-env-vars CRAVES_TOKEN_REVOCATION_ENABLED=false \
+            --output none
+          wait_disabled "$app" CRAVES_TOKEN_REVOCATION_ENABLED
+        done
+
+        az containerapp update \
+          --resource-group "$RG" \
+          --name "$AUTH" \
+          --set-env-vars CRAVES_TOKEN_REVOCATION_PUBLISHER_ENABLED=false \
+          --output none
+        wait_disabled "$AUTH" CRAVES_TOKEN_REVOCATION_PUBLISHER_ENABLED
+
+        echo 'Redis rate limiting, revocation consumers and publisher are disabled.'
+        echo 'Auth identities, refresh-session revocations, outbox rows, Redis TTL keys and audit evidence were preserved.'
+        echo 'No Redis resource, secret, key or database was deleted.'

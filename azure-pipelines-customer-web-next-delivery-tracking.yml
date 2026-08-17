@@ -1,0 +1,501 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmReplaceCurrentCustomerWeb
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: acrName
+    type: string
+    default: cravesprodlowacr82121
+  - name: containerAppName
+    type: string
+    default: ca-craves-web-prodlow
+  - name: imageTag
+    type: string
+    default: $(Build.BuildId)
+  - name: apiBaseUrl
+    type: string
+    default: https://api.craves.in/api/v1
+  - name: cashfreeMode
+    type: string
+    default: sandbox
+    values:
+      - sandbox
+      - production
+
+variables:
+  appPath: apps/customer-web-next
+  imageRepository: craves/customer-web-next
+  expectedSubscriptionId: 4f897b61-9b52-44b4-8cf1-bdac281cc1aa
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    fetchDepth: 1
+
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: 24.x
+
+  - script: |
+      set -euo pipefail
+      CONFIRM='${{ parameters.confirmReplaceCurrentCustomerWeb }}'
+      if [[ "${CONFIRM,,}" != 'true' ]]; then
+        echo 'ERROR: confirmReplaceCurrentCustomerWeb must be true before replacing the current web image.' >&2
+        exit 1
+      fi
+
+      for NAME in \
+        NEXT_PUBLIC_FIREBASE_API_KEY \
+        NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN \
+        NEXT_PUBLIC_FIREBASE_PROJECT_ID \
+        NEXT_PUBLIC_FIREBASE_APP_ID \
+        NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID \
+        NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET; do
+        VALUE="${!NAME:-}"
+        if [[ -z "$VALUE" || "$VALUE" == '$('* || "$VALUE" == replace-* ]]; then
+          echo "ERROR: Azure DevOps variable $NAME is required." >&2
+          exit 1
+        fi
+      done
+
+      case "$NEXT_PUBLIC_CASHFREE_MODE" in
+        sandbox|production) ;;
+        *) echo 'ERROR: Cashfree mode must be sandbox or production.' >&2; exit 1 ;;
+      esac
+    displayName: Confirm replacement and public web configuration
+    env:
+      NEXT_PUBLIC_FIREBASE_API_KEY: $(NEXT_PUBLIC_FIREBASE_API_KEY)
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: $(NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: $(NEXT_PUBLIC_FIREBASE_PROJECT_ID)
+      NEXT_PUBLIC_FIREBASE_APP_ID: $(NEXT_PUBLIC_FIREBASE_APP_ID)
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: $(NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: $(NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)
+      NEXT_PUBLIC_CASHFREE_MODE: ${{ parameters.cashfreeMode }}
+
+  - script: |
+      set -euo pipefail
+      cd '$(appPath)'
+      npm ci --no-audit --no-fund
+      npm run lint
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Verify merged customer web
+    env:
+      CRAVES_API_BASE_URL: ${{ parameters.apiBaseUrl }}
+      NEXT_PUBLIC_FIREBASE_API_KEY: $(NEXT_PUBLIC_FIREBASE_API_KEY)
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: $(NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: $(NEXT_PUBLIC_FIREBASE_PROJECT_ID)
+      NEXT_PUBLIC_FIREBASE_APP_ID: $(NEXT_PUBLIC_FIREBASE_APP_ID)
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: $(NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: $(NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)
+      NEXT_PUBLIC_CASHFREE_MODE: ${{ parameters.cashfreeMode }}
+      NEXT_PUBLIC_CRAVES_ALLOW_CATALOG_FALLBACK: 'false'
+
+  - task: AzureCLI@2
+    displayName: Record current web image and revision
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        EXPECTED_SUBSCRIPTION_ID='$(expectedSubscriptionId)'
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.containerAppName }}'
+
+        az account set --subscription "$EXPECTED_SUBSCRIPTION_ID"
+        ACTIVE_SUBSCRIPTION_ID=$(az account show --query id -o tsv --only-show-errors)
+        [[ "$ACTIVE_SUBSCRIPTION_ID" == "$EXPECTED_SUBSCRIPTION_ID" ]] || {
+          echo "ERROR: Azure CLI is using subscription $ACTIVE_SUBSCRIPTION_ID instead of $EXPECTED_SUBSCRIPTION_ID." >&2
+          exit 3
+        }
+        echo "Azure subscription verified: $ACTIVE_SUBSCRIPTION_ID"
+
+        APP_JSON=''
+        for ATTEMPT in $(seq 1 6); do
+          ERROR_FILE=$(mktemp)
+          if APP_JSON=$(az containerapp show \
+            --subscription "$EXPECTED_SUBSCRIPTION_ID" \
+            --resource-group "$RG" \
+            --name "$APP" \
+            -o json \
+            --only-show-errors 2>"$ERROR_FILE"); then
+            rm -f "$ERROR_FILE"
+            break
+          fi
+
+          echo "Container App lookup attempt $ATTEMPT/6 failed." >&2
+          cat "$ERROR_FILE" >&2 || true
+          rm -f "$ERROR_FILE"
+          [[ "$ATTEMPT" -lt 6 ]] && sleep 10
+        done
+
+        if [[ -z "$APP_JSON" ]]; then
+          echo "ERROR: Could not resolve Container App $APP in resource group $RG after retries." >&2
+          echo "Container Apps visible in the expected resource group:" >&2
+          az resource list \
+            --subscription "$EXPECTED_SUBSCRIPTION_ID" \
+            --resource-group "$RG" \
+            --resource-type Microsoft.App/containerApps \
+            --query '[].{name:name,location:location}' \
+            -o table || true
+          exit 3
+        fi
+
+        CURRENT_IMAGE=$(jq -r '.properties.template.containers[0].image // ""' <<<"$APP_JSON")
+        CURRENT_REVISION=$(jq -r '.properties.latestReadyRevisionName // .properties.latestRevisionName // ""' <<<"$APP_JSON")
+        FQDN=$(jq -r '.properties.configuration.ingress.fqdn // ""' <<<"$APP_JSON")
+        TARGET_PORT=$(jq -r '.properties.configuration.ingress.targetPort // 0' <<<"$APP_JSON")
+        ACTIVE_REVISIONS_MODE=$(jq -r '.properties.configuration.activeRevisionsMode // "Single"' <<<"$APP_JSON")
+        ROLLBACK_TRAFFIC_B64=$(jq -c '.properties.configuration.ingress.traffic // []' <<<"$APP_JSON" | base64 -w0)
+        ROLLBACK_BUILD_SHA=$(jq -r '[.properties.template.containers[0].env[]? | select(.name == "CRAVES_BUILD_SHA") | .value][0] // ""' <<<"$APP_JSON")
+
+        case "$CURRENT_IMAGE" in
+          */craves/customer-web:*|*/craves/customer-web-next:*|*/craves/api-test-dashboard:*) ;;
+          *) echo "ERROR: Unexpected current web image: $CURRENT_IMAGE" >&2; exit 1 ;;
+        esac
+        [[ -n "$CURRENT_REVISION" ]] || { echo 'ERROR: Current ready revision is missing.' >&2; exit 1; }
+        [[ -n "$FQDN" ]] || { echo 'ERROR: Current web FQDN is missing.' >&2; exit 1; }
+        [[ "$TARGET_PORT" == '3000' ]] || { echo "ERROR: Expected ingress target port 3000, found $TARGET_PORT." >&2; exit 1; }
+        case "$ACTIVE_REVISIONS_MODE" in
+          Single|Multiple) ;;
+          *) echo "ERROR: Unexpected active revisions mode: $ACTIVE_REVISIONS_MODE" >&2; exit 1 ;;
+        esac
+
+        mkdir -p '$(Build.ArtifactStagingDirectory)/customer-web-rollback'
+        {
+          printf 'RESOURCE_GROUP=%s\n' "$RG"
+          printf 'CONTAINER_APP=%s\n' "$APP"
+          printf 'ROLLBACK_IMAGE=%s\n' "$CURRENT_IMAGE"
+          printf 'ROLLBACK_REVISION=%s\n' "$CURRENT_REVISION"
+          printf 'FQDN=%s\n' "$FQDN"
+          printf 'ACTIVE_REVISIONS_MODE=%s\n' "$ACTIVE_REVISIONS_MODE"
+          printf 'ROLLBACK_TRAFFIC_B64=%s\n' "$ROLLBACK_TRAFFIC_B64"
+          printf 'ROLLBACK_BUILD_SHA=%s\n' "$ROLLBACK_BUILD_SHA"
+        } > '$(Build.ArtifactStagingDirectory)/customer-web-rollback/state.env'
+
+        echo "Current revision: $CURRENT_REVISION"
+        echo "Current image: $CURRENT_IMAGE"
+        echo "##vso[task.setvariable variable=ROLLBACK_IMAGE]$CURRENT_IMAGE"
+        echo "##vso[task.setvariable variable=ROLLBACK_REVISION]$CURRENT_REVISION"
+        echo "##vso[task.setvariable variable=WEB_FQDN]$FQDN"
+        echo "##vso[task.setvariable variable=ACTIVE_REVISIONS_MODE]$ACTIVE_REVISIONS_MODE"
+        echo "##vso[task.setvariable variable=ROLLBACK_TRAFFIC_B64]$ROLLBACK_TRAFFIC_B64"
+        echo "##vso[task.setvariable variable=ROLLBACK_BUILD_SHA]$ROLLBACK_BUILD_SHA"
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish customer web rollback record
+    inputs:
+      targetPath: $(Build.ArtifactStagingDirectory)/customer-web-rollback
+      artifact: customer-web-rollback-$(Build.BuildId)
+      publishLocation: pipeline
+
+  - task: AzureCLI@2
+    displayName: Build and push connected customer web image
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        EXPECTED_SUBSCRIPTION_ID='$(expectedSubscriptionId)'
+        ACR='${{ parameters.acrName }}'
+        TAG='${{ parameters.imageTag }}'
+
+        az account set --subscription "$EXPECTED_SUBSCRIPTION_ID"
+        ACTIVE_SUBSCRIPTION_ID=$(az account show --query id -o tsv --only-show-errors)
+        [[ "$ACTIVE_SUBSCRIPTION_ID" == "$EXPECTED_SUBSCRIPTION_ID" ]] || {
+          echo "ERROR: Azure CLI is using subscription $ACTIVE_SUBSCRIPTION_ID instead of $EXPECTED_SUBSCRIPTION_ID." >&2
+          exit 3
+        }
+
+        ACR_LOGIN_SERVER=$(az acr show \
+          --subscription "$EXPECTED_SUBSCRIPTION_ID" \
+          --name "$ACR" \
+          --resource-group '${{ parameters.resourceGroupName }}' \
+          --query loginServer \
+          -o tsv)
+        IMAGE="$ACR_LOGIN_SERVER/$(imageRepository):$TAG"
+
+        az acr login --name "$ACR"
+        docker build \
+          --build-arg NEXT_PUBLIC_FIREBASE_API_KEY="$NEXT_PUBLIC_FIREBASE_API_KEY" \
+          --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="$NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN" \
+          --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID="$NEXT_PUBLIC_FIREBASE_PROJECT_ID" \
+          --build-arg NEXT_PUBLIC_FIREBASE_APP_ID="$NEXT_PUBLIC_FIREBASE_APP_ID" \
+          --build-arg NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID="$NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID" \
+          --build-arg NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET="$NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET" \
+          --build-arg NEXT_PUBLIC_CASHFREE_MODE="$NEXT_PUBLIC_CASHFREE_MODE" \
+          --build-arg NEXT_PUBLIC_CRAVES_ALLOW_CATALOG_FALLBACK=false \
+          --label org.opencontainers.image.revision="$(Build.SourceVersion)" \
+          -t "$IMAGE" \
+          '$(appPath)'
+        docker push "$IMAGE"
+        echo "##vso[task.setvariable variable=NEXT_IMAGE]$IMAGE"
+    env:
+      NEXT_PUBLIC_FIREBASE_API_KEY: $(NEXT_PUBLIC_FIREBASE_API_KEY)
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: $(NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: $(NEXT_PUBLIC_FIREBASE_PROJECT_ID)
+      NEXT_PUBLIC_FIREBASE_APP_ID: $(NEXT_PUBLIC_FIREBASE_APP_ID)
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: $(NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: $(NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)
+      NEXT_PUBLIC_CASHFREE_MODE: ${{ parameters.cashfreeMode }}
+
+  - task: AzureCLI@2
+    displayName: Deploy exact commit, shift traffic, verify and automatically roll back
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        EXPECTED_SUBSCRIPTION_ID='$(expectedSubscriptionId)'
+        RG='${{ parameters.resourceGroupName }}'
+        APP='${{ parameters.containerAppName }}'
+        IMAGE='$(NEXT_IMAGE)'
+        PREVIOUS_IMAGE='$(ROLLBACK_IMAGE)'
+        PREVIOUS_REVISION='$(ROLLBACK_REVISION)'
+        PREVIOUS_BUILD_SHA='$(ROLLBACK_BUILD_SHA)'
+        ROLLBACK_TRAFFIC_B64='$(ROLLBACK_TRAFFIC_B64)'
+        ACTIVE_MODE='$(ACTIVE_REVISIONS_MODE)'
+        EXPECTED_SHA='$(Build.SourceVersion)'
+        API_BASE_URL='${{ parameters.apiBaseUrl }}'
+        FQDN='$(WEB_FQDN)'
+        DEPLOYMENT_ATTEMPTED=false
+
+        az account set --subscription "$EXPECTED_SUBSCRIPTION_ID"
+        ACTIVE_SUBSCRIPTION_ID=$(az account show --query id -o tsv --only-show-errors)
+        [[ "$ACTIVE_SUBSCRIPTION_ID" == "$EXPECTED_SUBSCRIPTION_ID" ]] || {
+          echo "ERROR: Azure CLI is using subscription $ACTIVE_SUBSCRIPTION_ID instead of $EXPECTED_SUBSCRIPTION_ID." >&2
+          exit 3
+        }
+        echo "Azure subscription verified: $ACTIVE_SUBSCRIPTION_ID"
+
+        [[ "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+          echo "ERROR: Build.SourceVersion is not a full Git commit SHA: $EXPECTED_SHA" >&2
+          exit 1
+        }
+
+        show_containerapp_json() {
+          local attempt error_file output
+          for attempt in $(seq 1 6); do
+            error_file=$(mktemp)
+            if output=$(az containerapp show \
+              --subscription "$EXPECTED_SUBSCRIPTION_ID" \
+              --resource-group "$RG" \
+              --name "$APP" \
+              -o json \
+              --only-show-errors 2>"$error_file"); then
+              rm -f "$error_file"
+              printf '%s' "$output"
+              return 0
+            fi
+
+            echo "Container App lookup attempt $attempt/6 failed." >&2
+            cat "$error_file" >&2 || true
+            rm -f "$error_file"
+            [[ "$attempt" -lt 6 ]] && sleep 10
+          done
+          return 3
+        }
+
+        update_containerapp_with_retry() {
+          local target_image="$1"
+          shift
+          local attempt output status
+
+          for attempt in $(seq 1 6); do
+            set +e
+            output=$(az containerapp update \
+              --subscription "$EXPECTED_SUBSCRIPTION_ID" \
+              --resource-group "$RG" \
+              --name "$APP" \
+              --image "$target_image" \
+              "$@" \
+              -o none 2>&1)
+            status=$?
+            set -e
+
+            if [[ "$status" -eq 0 ]]; then
+              return 0
+            fi
+
+            echo "Container App update attempt $attempt/6 failed:" >&2
+            printf '%s\n' "$output" >&2
+            if grep -qiE 'does not exist|ResourceNotFound|not found' <<<"$output" && [[ "$attempt" -lt 6 ]]; then
+              sleep 10
+              continue
+            fi
+            return "$status"
+          done
+          return 3
+        }
+
+        restore_previous_release() {
+          local rollback_app_json current_image
+
+          if ! rollback_app_json=$(show_containerapp_json); then
+            echo "WARNING: Rollback skipped because the target Container App could not be resolved in the verified subscription after retries." >&2
+            return 0
+          fi
+
+          current_image=$(jq -r '.properties.template.containers[0].image // ""' <<<"$rollback_app_json")
+          if [[ "$current_image" == "$PREVIOUS_IMAGE" ]]; then
+            echo "Rollback not required: the Container App is already using the recorded image $PREVIOUS_IMAGE." >&2
+            return 0
+          fi
+
+          if [[ "$ACTIVE_MODE" == 'Multiple' ]]; then
+            mapfile -t PREVIOUS_WEIGHTS < <(
+              printf '%s' "$ROLLBACK_TRAFFIC_B64" |
+                base64 -d |
+                jq -r '.[] | select((.revisionName // "") != "" and (.weight // 0) > 0) | "\(.revisionName)=\(.weight)"'
+            )
+            if (( ${#PREVIOUS_WEIGHTS[@]} == 0 )); then
+              PREVIOUS_WEIGHTS=("$PREVIOUS_REVISION=100")
+            fi
+            az containerapp ingress traffic set \
+              --subscription "$EXPECTED_SUBSCRIPTION_ID" \
+              --resource-group "$RG" \
+              --name "$APP" \
+              --revision-weight "${PREVIOUS_WEIGHTS[@]}" \
+              -o none
+          else
+            if [[ -z "$PREVIOUS_BUILD_SHA" ]]; then
+              PREVIOUS_BUILD_SHA=unknown
+            fi
+            update_containerapp_with_retry \
+              "$PREVIOUS_IMAGE" \
+              --set-env-vars CRAVES_BUILD_SHA="$PREVIOUS_BUILD_SHA"
+          fi
+        }
+
+        rollback() {
+          EXIT_CODE=$?
+          if [[ "$EXIT_CODE" -eq 0 ]]; then return; fi
+          trap - EXIT
+
+          if [[ "$DEPLOYMENT_ATTEMPTED" != 'true' ]]; then
+            echo "Deployment failed before any Container App update was attempted; rollback is not required." >&2
+            exit "$EXIT_CODE"
+          fi
+
+          echo "Deployment verification failed. Checking whether rollback to $PREVIOUS_IMAGE is required (recorded revision $PREVIOUS_REVISION)." >&2
+          restore_previous_release || true
+          exit "$EXIT_CODE"
+        }
+        trap rollback EXIT
+
+        INITIAL_APP_JSON=$(show_containerapp_json) || {
+          echo "ERROR: The target Container App could not be resolved before deployment." >&2
+          exit 3
+        }
+        PREVIOUS_LATEST=$(jq -r '.properties.latestRevisionName // ""' <<<"$INITIAL_APP_JSON")
+        [[ -n "$PREVIOUS_LATEST" ]] || {
+          echo 'ERROR: Current latest revision is missing before deployment.' >&2
+          exit 3
+        }
+
+        DEPLOYMENT_ATTEMPTED=true
+        update_containerapp_with_retry \
+          "$IMAGE" \
+          --set-env-vars \
+            CRAVES_API_BASE_URL="$API_BASE_URL" \
+            CRAVES_BUILD_SHA="$EXPECTED_SHA" \
+            NODE_ENV=production \
+            PORT=3000 \
+            NEXT_PUBLIC_CRAVES_ALLOW_CATALOG_FALLBACK=false
+
+        NEW_REVISION=''
+        for ATTEMPT in $(seq 1 60); do
+          if ! APP_JSON=$(show_containerapp_json); then
+            echo "Revision attempt $ATTEMPT/60: Container App lookup did not recover." >&2
+            exit 3
+          fi
+
+          LATEST=$(jq -r '.properties.latestRevisionName // ""' <<<"$APP_JSON")
+          READY=$(jq -r '.properties.latestReadyRevisionName // ""' <<<"$APP_JSON")
+          RUNNING=$(jq -r '.properties.runningStatus // ""' <<<"$APP_JSON")
+          CURRENT_IMAGE=$(jq -r '.properties.template.containers[0].image // ""' <<<"$APP_JSON")
+          echo "Revision attempt $ATTEMPT/60: latest=$LATEST ready=$READY running=$RUNNING"
+
+          if [[ "$LATEST" != "$PREVIOUS_LATEST" && "$LATEST" == "$READY" && "$RUNNING" == 'Running' && "$CURRENT_IMAGE" == "$IMAGE" ]]; then
+            NEW_REVISION="$LATEST"
+            break
+          fi
+          sleep 10
+        done
+
+        [[ -n "$NEW_REVISION" ]] || {
+          echo 'ERROR: The new customer-web revision did not become ready within ten minutes.' >&2
+          exit 1
+        }
+
+        if [[ "$ACTIVE_MODE" == 'Multiple' ]]; then
+          az containerapp ingress traffic set \
+            --subscription "$EXPECTED_SUBSCRIPTION_ID" \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --revision-weight "$NEW_REVISION=100" \
+            -o none
+        fi
+
+        for ATTEMPT in $(seq 1 36); do
+          VERSION_CODE=$(curl -sS --max-time 30 -H 'Cache-Control: no-cache' -o /tmp/customer-web-version.json -w '%{http_code}' "https://$FQDN/api/version?release=$EXPECTED_SHA" || true)
+          LIVE_SHA=$(jq -r '.commitSha // ""' /tmp/customer-web-version.json 2>/dev/null || true)
+          HOME_CODE=$(curl -sS --max-time 30 -H 'Cache-Control: no-cache' -o /tmp/customer-web-home.html -w '%{http_code}' "https://$FQDN/?release=$EXPECTED_SHA" || true)
+          SIGN_IN_CODE=$(curl -sS --max-time 30 -H 'Cache-Control: no-cache' -o /tmp/customer-web-sign-in.html -w '%{http_code}' "https://$FQDN/sign-in?returnTo=%2Fchef&release=$EXPECTED_SHA" || true)
+          AUTH_CODE=$(curl -sS --max-time 30 -o /tmp/customer-web-auth.json -w '%{http_code}' "https://$FQDN/api/auth/me" || true)
+          echo "Public attempt $ATTEMPT/36: version=$VERSION_CODE sha=$LIVE_SHA home=$HOME_CODE chef-sign-in=$SIGN_IN_CODE auth=$AUTH_CODE"
+
+          if [[ "$VERSION_CODE" == '200' ]] &&
+             [[ "$LIVE_SHA" == "$EXPECTED_SHA" ]] &&
+             [[ "$HOME_CODE" == '200' ]] &&
+             grep -q 'Craves' /tmp/customer-web-home.html &&
+             [[ "$SIGN_IN_CODE" == '200' ]] &&
+             grep -q 'Secure Craves access' /tmp/customer-web-sign-in.html &&
+             ! grep -q 'Secure customer access' /tmp/customer-web-sign-in.html &&
+             [[ "$AUTH_CODE" == '401' ]]; then
+            trap - EXIT
+            echo "SUCCESS: Git commit $EXPECTED_SHA is receiving 100% customer-web traffic at https://$FQDN"
+            echo "Firebase Authorized Domains must include: $FQDN"
+            exit 0
+          fi
+          sleep 5
+        done
+
+        echo "ERROR: Public ingress never served the exact deployed commit $EXPECTED_SHA." >&2
+        exit 1
+
+  - task: AzureCLI@2
+    displayName: Show latest customer web logs
+    condition: always()
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set +e
+        EXPECTED_SUBSCRIPTION_ID='$(expectedSubscriptionId)'
+        az account set --subscription "$EXPECTED_SUBSCRIPTION_ID"
+        ACTIVE_SUBSCRIPTION_ID=$(az account show --query id -o tsv --only-show-errors)
+        if [[ "$ACTIVE_SUBSCRIPTION_ID" != "$EXPECTED_SUBSCRIPTION_ID" ]]; then
+          echo "WARNING: Skipping customer web logs because Azure CLI is using subscription $ACTIVE_SUBSCRIPTION_ID instead of $EXPECTED_SUBSCRIPTION_ID." >&2
+          exit 0
+        fi
+
+        az containerapp logs show \
+          --subscription "$EXPECTED_SUBSCRIPTION_ID" \
+          --resource-group '${{ parameters.resourceGroupName }}' \
+          --name '${{ parameters.containerAppName }}' \
+          --tail 120 || true

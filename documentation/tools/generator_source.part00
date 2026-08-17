@@ -1,0 +1,106 @@
+from pathlib import Path
+from io import BytesIO
+import base64, hashlib, textwrap
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from config import DATE, SNAPSHOT, REPO, E, GAPS
+from catalog import DOCS, ANCHORS, FEATURES, GLOSSARY
+
+ROOT=Path(__file__).resolve().parents[2]; OUT=ROOT/'documentation'; W,H=A4
+RED=colors.HexColor('#F62E18'); INK=colors.HexColor('#2B1A12'); MUTED=colors.HexColor('#765E56'); SOFT=colors.HexColor('#FFF6F3'); LINE=colors.HexColor('#E7D8D2'); GREEN=colors.HexColor('#287A4B'); AMBER=colors.HexColor('#B66A00'); GOLD=colors.HexColor('#F6B545'); WHITE=colors.white
+FONT='Helvetica'; BOLD='Helvetica-Bold'; IT='Helvetica-Oblique'
+LOGO_SHA='c225ec7e220d15d28bcf69ca563d330c83b7c9fabffafff95bc1b1d83ea35ecf'
+
+def load_logo():
+    d=OUT/'brand'; parts=sorted(d.glob('craves-logo-user-approved.base64.*'))
+    if not parts: raise RuntimeError('Approved user logo parts are missing')
+    raw=base64.b64decode(''.join(p.read_text().strip() for p in parts))
+    if hashlib.sha256(raw).hexdigest()!=LOGO_SHA: raise RuntimeError('Approved user logo hash mismatch')
+    return ImageReader(BytesIO(raw))
+LOGO=load_logo()
+
+def wrap(s,n=92): return textwrap.wrap(str(s),width=n,break_long_words=False,break_on_hyphens=False) or ['']
+def pal(kind):
+    if kind=='confidential': return colors.HexColor('#211715'),colors.HexColor('#F7EFEC'),colors.HexColor('#C8B4AC')
+    if kind=='investor': return colors.HexColor('#180E0A'),colors.HexColor('#FFF7F2'),colors.HexColor('#DCC9BF')
+    return WHITE,INK,MUTED
+
+def logo(c,x,y,s=30): c.drawImage(LOGO,x,y,s,s,mask='auto',preserveAspectRatio=True)
+def fit(c,text,font,size,maxw):
+    while size>5.5 and stringWidth(text,font,size)>maxw: size-=.25
+    c.setFont(font,size)
+
+def hf(c,title,kind,p):
+    bg,fg,sub=pal(kind); c.setFillColor(bg); c.rect(0,0,W,H,fill=1,stroke=0); logo(c,42,H-53,28)
+    c.setFillColor(sub); fit(c,title,BOLD,7.1,430); c.drawRightString(W-42,H-39,title)
+    c.setStrokeColor(GOLD if kind=='investor' else RED); c.setLineWidth(1.2); c.line(42,H-65,W-42,H-65)
+    c.setStrokeColor(colors.HexColor('#60463E') if kind!='general' else LINE); c.setLineWidth(.5); c.line(42,43,W-42,43)
+    c.setFillColor(sub); c.setFont(FONT,6.4); c.drawString(42,28,title[:58]); c.drawRightString(W-42,28,f'Page {p}')
+    if kind=='confidential': c.setFillColor(RED); c.setFont(BOLD,6.5); c.drawCentredString(W/2,28,'Confidential — Internal Use Only.')
+    elif kind=='investor': c.setFillColor(GOLD); c.setFont(BOLD,6.5); c.drawCentredString(W/2,28,'Investor and diligence use')
+
+def para(c,text,x,y,kind='general',n=90,size=8.15,lead=10.5,maxlines=None,color=None):
+    _,fg,_=pal(kind); c.setFillColor(color or fg); c.setFont(FONT,size); lines=wrap(text,n); lines=lines[:maxlines] if maxlines else lines
+    for ln in lines: c.drawString(x,y,ln); y-=lead
+    return y
+
+def sec(c,title,y,kind='general'):
+    c.setFillColor(GOLD if kind=='investor' else RED); c.setFont(BOLD,10.2); c.drawString(42,y,title); c.line(42,y-5,145,y-5); return y-18
+
+def bullets(c,items,y,kind='general',n=80,maxitems=6):
+    _,fg,_=pal(kind); c.setFont(FONT,7.8)
+    for item in items[:maxitems]:
+        lines=wrap(item,n); c.setFillColor(GOLD if kind=='investor' else RED); c.circle(46,y+2,1.5,fill=1,stroke=0); c.setFillColor(fg)
+        for j,ln in enumerate(lines): c.drawString(56,y,ln); y-=10
+        y-=2
+    return y
+
+def box(c,title,body,x,y,w,h,kind='general',accent=None):
+    bg,fg,_=pal(kind); accent=accent or (GOLD if kind=='investor' else RED); fill=SOFT if kind=='general' else colors.HexColor('#30211D')
+    c.setFillColor(fill); c.setStrokeColor(accent); c.roundRect(x,y-h,w,h,8,fill=1,stroke=1); c.setFillColor(accent); c.setFont(BOLD,8.3); c.drawString(x+10,y-17,title); c.setFillColor(fg); c.setFont(FONT,7.35); yy=y-32
+    for ln in wrap(body,max(28,int(w/5.0))):
+        if yy<y-h+10: break
+        c.drawString(x+10,yy,ln); yy-=9
+
+def domain(text,default='platform'):
+    t=text.lower(); rules=[('mobile',['mobile','pkce','keychain','keystore']),('apim',['apim','gateway','openapi','named value']),('notification',['notification','email','sms','push','service bus']),('subscription',['subscription','plan','entitlement']),('payment',['payment','cashfree','razorpay','refund','webhook']),('checkout',['checkout','cart','quote']),('catalog',['catalog','meal','discovery','search','rating','favorite','kitchen']),('chef',['chef','earnings','menu']),('order',['order','delivery','eta','idempotency','shortage']),('location',['location','address','maps','gps','geocod']),('privacy',['privacy','consent','export','deletion']),('ai',['ai','concierge','signalr']),('admin',['admin','staff','support','backoffice']),('auth',['auth','otp','jwt','token','sign-in','login','session']),('devops',['pipeline','deployment','rollback','environment','ci/cd','acr','revision','flyway']),('security',['security','secret','access','role','ownership','rbac']),('errors',['error','failure','troubleshoot','incident','401','403']),('integration',['integration','google','provider','adapter','borzo']),('legacy',['legacy']),('frontend',['frontend','next.js','bff','browser','screen']),('backend',['backend','service','database','spring boot'])]
+    for d,ws in rules:
+        if any(w in t for w in ws): return d
+    return default if default in E else 'platform'
+
+def status(topic,d):
+    t=topic.lower()
+    if d=='mobile' or 'native' in t: return 'Foundation / partial',AMBER,'The repository proves contracts and milestone groundwork, but not a complete native runtime on the reviewed main snapshot.'
+    if 'legacy' in t: return 'Legacy / reference',MUTED,'Useful for history and compatibility; it is not treated as the preferred current runtime.'
+    if 'openapi' in t or 'gap' in t: return 'Needs source confirmation',AMBER,'The source reference could not be verified at the cited path, so this document does not invent the missing detail.'
+    return 'Current implementation',GREEN,'Direct repository evidence supports this capability or architecture boundary.'
+
+def simple_name(t): return t.replace('/',' / ').replace('_',' ').strip().capitalize()
+
+def explanation(topic,d):
+    base=E[d][0]
+    return f'{simple_name(topic)} is part of the {d.replace("_"," ")} area of Craves. {base} In practical terms, this capability should make one responsibility clear: who starts the action, which component validates it, which service owns the final state, and what the user sees when the action succeeds or fails.'
+
+def technical(topic,d):
+    base=E[d][1]
+    return f'{base} For {topic}, the important engineering rule is that the user interface requests or displays state; the owning backend or gateway policy decides whether the request is valid. Data, identity, provider calls and deployment configuration remain inside their documented boundaries, which prevents a convenient screen or integration from becoming a second source of truth.'
+
+def flow(topic,d):
+    starts={'chef':'Chef starts the action','admin':'Authorized staff starts the action','devops':'Pipeline or operator starts the change','integration':'Owning service requests a provider operation','notification':'A domain event or request starts notification delivery','mobile':'The mobile user starts the action','frontend':'The user starts the action in the web app','apim':'Client or BFF sends the API request'}
+    return [starts.get(d,'Customer or authorized actor starts the action'),'Client/BFF validates basic input and adds authenticated context','APIM and the owning service validate identity, role, ownership and current state','Owning service reads or writes authoritative data and calls a provider only through its defined adapter','The caller receives confirmed state or a traceable error; the UI is refreshed from that result']
+
+def draw_flow(c,steps,y,kind='general'):
+    _,fg,_=pal(kind); n=len(steps); gap=7; bw=(W-84-gap*(n-1))/n; h=66; x=42
+    for i,s in enumerate(steps):
+        fill=SOFT if kind=='general' else colors.HexColor('#30211D'); c.setFillColor(fill); c.setStrokeColor(GOLD if kind=='investor' else RED); c.roundRect(x,y-h,bw,h,7,fill=1,stroke=1)
+        c.setFillColor(GOLD if kind=='investor' else RED); c.circle(x+13,y-14,7,fill=1,stroke=0); c.setFillColor(WHITE); c.setFont(BOLD,6.4); c.drawCentredString(x+13,y-16.5,str(i+1)); c.setFillColor(fg); c.setFont(FONT,6.5); yy=y-28
+        for ln in wrap(s,max(14,int(bw/4.8)))[:4]: c.drawString(x+7,yy,ln); yy-=8
+        if i<n-1: c.setStrokeColor(GOLD if kind=='investor' else RED); c.setLineWidth(1.4); c.line(x+bw+1,y-h/2,x+bw+gap-1,y-h/2); c.line(x+bw+gap-5,y-h/2+3,x+bw+gap-1,y-h/2); c.line(x+bw+gap-5,y-h/2-3,x+bw+gap-1,y-h/2)
+        x+=bw+gap
+    return y-h-14
+
+def problems(d):
+    m={'auth':[('Sign-in fails','OTP/session/token is invalid, expired or misconfigured','Use the supported sign-in or refresh path and check issuer/audience/configuration.'),('403 after sign-in','Caller lacks the required role or ownership','Confirm intended access; do not bypass authorization.')], 'checkout':[('Checkout rejected','Saved address, cart or catalog state is not valid','Reload authoritative cart/address/catalog state and correct the failing condition.'),('Displayed total changed','Backend revalidated price or availability','Show the backend quote; do not preserve a client-calculated amount.')], 'order':[('Order not found','Wrong ID or ownership mismatch','Verify ID and caller context; never expose another user’s order.'),('State change rejected','Transition is not valid from the current state','Reload order state and use only the supported next action.')], 'payment':[('Payment result is unclear','Provider status/callback is delayed or ambiguous','Verify through the backend/provider reconciliation path before retrying.'),('Webhook rejected','Signature validation failed','Verify the raw body with the server secret; never disable signature checks.')], 'devops':[('Pipeline succeeds but app is not ready','Revision is still starting or readiness was not awaited','Check the actual revision and health/readiness after deployment.'),('New revision is unhealthy','Image, configuration, migration or dependency failed','Rollback to the known-good image/revision and verify recovery.')], 'notification':[('External channel stays pending','Provider adapter is disabled or unavailable','Check channel configuration and delivery-attempt state.'),('Duplicate delivery','Retry did not reuse the event/request key','Use idempotency evidence before resending.')], 'apim':[('401 at gateway','JWT validation failed','Verify token source, issuer/audience and APIM policy.'),('403 at gateway','Role/product policy denied the caller','Verify admin/customer product and operation role rules.')], 'mobile':[('401 after expiry','Access token expired','Attempt the documented silent refresh once, then interactive sign-in if needed.'),('Build/release cannot be proven','Native source/signing is incomplete in reviewed main','Restore the authoritative native project before claiming release readiness.')], 'frontend':[('Generic upstream error','BFF rejected malformed/unexpected backend response','Use request ID and compare the current response contract.'),('Amount differs','Client state is stale','Render backend-authoritative cart/quote state.')], 'integration':[('Provider is unavailable','External dependency or credential/config problem','Keep Craves state consistent and retry only when safe/idempotent.'),('Provider contract changed','Adapter no longer matches vendor response','Fix and test the adapter rather than leaking vendor logic into domains.')], 'security':[('Secret exposed','Sensitive value appeared outside secret storage','Rotate, remove exposure and record incident evidence.'),('Spoofed callback/internal call','Signature/internal credential validation failed','Fail closed and restore verification before re-enabling.')], 'location':[('Current location unavailable','Permission/device/geocoder failed','Allow manual saved-address entry and keep checkout dependent on a valid saved address.'),('Address rejected at checkout','Address is missing ownership/required fields/coordinates','Fix the saved address in User-Chef before placing the order.')], 'catalog':[('Nearby results empty','No active geocoded kitchen with sellable items in query radius','Confirm kitchen coordinates, active menu items and caller radius.'),('Menu item cannot sell','Packaging/availability/status metadata incomplete','Chef must provide valid required metadata and make the item available.')], 'subscription':[('Lifecycle action rejected','Current subscription state does not allow it','Reload current state and use a supported transition.'),('Commercial rule missing','Product/Finance decision is intentionally not defined','Document the decision before implementing it.')], 'errors':[('401 Unauthorized','Authentication is missing/expired/invalid','Use supported identity/refresh flow and capture request ID.'),('5xx/upstream unavailable','Service/database/provider/deployment is unhealthy','Use correlation evidence to isolate the boundary and rollback if release-related.')], 'admin':[('Admin action denied','Caller lacks admin role/product permission','Use approved staff access process and least privilege.'),('Operation changes unexpected data','Wrong record/state selected','Stop, capture audit/request evidence and follow the documented recovery path.')], 'backend':[('Service health is down','Database/config/dependency/startup failure','Inspect health/readiness and recent deployment/config changes.'),('Request rejected','Validation, role, ownership or state rule failed','Use stable error code/request ID and correct the actual failing rule.')], 'platform':[('User sees stale state','Client cache/local state differs from backend','Reload from the owning service.'),('Dependency failure','Provider or downstream is unavailable','Preserve 

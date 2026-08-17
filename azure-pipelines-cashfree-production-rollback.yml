@@ -1,0 +1,56 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmDisableCashfreeProduction
+    type: boolean
+    default: false
+
+variables:
+  resourceGroup: rg-craves-prodlow-centralindia
+  containerApp: ca-craves-integration-service-pr
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+
+  - ${{ if eq(parameters.confirmDisableCashfreeProduction, true) }}:
+    - task: AzureCLI@2
+      displayName: Disable Cashfree production execution and ingress
+      inputs:
+        azureSubscription: $(AZURE_SERVICE_CONNECTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          az containerapp update -g '$(resourceGroup)' -n '$(containerApp)' \
+            --set-env-vars \
+              CRAVES_PAYMENT_ORDER_API_ENABLED=false \
+              CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED=false \
+              CRAVES_CASHFREE_WEBHOOK_INGRESS_ENABLED=false \
+              CRAVES_CASHFREE_WEBHOOK_WORKER_ENABLED=false \
+              CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED=false \
+              CRAVES_REFUND_RECONCILIATION_ENABLED=false >/dev/null
+          latest="$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query properties.latestRevisionName -o tsv)"
+          active=''; provisioning=''; replicas='0'
+          for _ in $(seq 1 60); do
+            active="$(az containerapp revision show -g '$(resourceGroup)' -n '$(containerApp)' --revision "$latest" --query properties.active -o tsv 2>/dev/null || true)"
+            provisioning="$(az containerapp revision show -g '$(resourceGroup)' -n '$(containerApp)' --revision "$latest" --query properties.provisioningState -o tsv 2>/dev/null || true)"
+            replicas="$(az containerapp revision show -g '$(resourceGroup)' -n '$(containerApp)' --revision "$latest" --query properties.replicas -o tsv 2>/dev/null || echo 0)"
+            [[ "$active" == 'true' && "$provisioning" == 'Provisioned' && "$replicas" -ge 1 ]] && break
+            sleep 10
+          done
+          [[ "$active" == 'true' && "$provisioning" == 'Provisioned' && "$replicas" -ge 1 ]] || { echo 'Cashfree rollback revision did not become active.' >&2; exit 2; }
+          values="$(az containerapp show -g '$(resourceGroup)' -n '$(containerApp)' --query 'properties.template.containers[0].env' -o json)"
+          for name in CRAVES_PAYMENT_ORDER_API_ENABLED CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED CRAVES_CASHFREE_WEBHOOK_INGRESS_ENABLED CRAVES_CASHFREE_WEBHOOK_WORKER_ENABLED CRAVES_REFUND_PROVIDER_EXECUTION_ENABLED CRAVES_REFUND_RECONCILIATION_ENABLED; do
+            value="$(jq -r --arg name "$name" '.[] | select(.name == $name) | .value' <<<"$values" | tail -1)"
+            [[ "$value" == 'false' ]] || { echo "$name did not return to false." >&2; exit 2; }
+          done
+
+  - ${{ if ne(parameters.confirmDisableCashfreeProduction, true) }}:
+    - bash: |
+        echo 'confirmDisableCashfreeProduction must be true.' >&2
+        exit 2
+      displayName: Block unconfirmed Cashfree rollback

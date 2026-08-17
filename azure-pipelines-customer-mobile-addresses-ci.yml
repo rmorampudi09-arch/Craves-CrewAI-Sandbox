@@ -1,0 +1,31 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/mobile/customer-app
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test mobile addresses
+  - script: |
+      set -euo pipefail
+      grep -q 'Authorization' apps/mobile/customer-app/src/addresses/addresses-api.ts
+      grep -q 'recommendLocation' apps/mobile/customer-app/src/screens/AddressFormScreen.tsx
+      if grep -REn '(identityId|AsyncStorage|console\.(log|debug))' apps/mobile/customer-app/src/addresses apps/mobile/customer-app/src/screens/AddressListScreen.tsx apps/mobile/customer-app/src/screens/AddressFormScreen.tsx --exclude='*.test.ts'; then
+        echo 'ERROR: Mobile address runtime references identity, insecure storage or logging.' >&2
+        exit 1
+      fi
+      if grep -REn '(react-native-geolocation|Geolocation\.getCurrentPosition)' apps/mobile/customer-app/src; then
+        echo 'ERROR: Unreviewed native location dependency or permission flow was introduced.' >&2
+        exit 1
+      fi
+      echo 'Mobile address ownership and native-location gates passed.'
+    displayName: Verify address privacy and location gates

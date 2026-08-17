@@ -1,0 +1,37 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test customer subscription management
+  - script: |
+      set -euo pipefail
+      grep -q 'isSameOrigin' apps/customer-web-next/src/app/api/subscriptions/route.ts
+      grep -q '/pause' apps/customer-web-next/src/components/subscription-manager.tsx
+      grep -q '/cancel' apps/customer-web-next/src/components/subscription-manager.tsx
+      if grep -REn '(customerIdentityId|chefIdentityId|localStorage|sessionStorage|console\.(log|debug))' \
+        apps/customer-web-next/src/app/api/subscriptions \
+        apps/customer-web-next/src/components/subscription-* \
+        apps/customer-web-next/src/app/subscriptions --exclude='*.test.ts'; then
+        echo 'ERROR: Subscription runtime exposes internal identities, browser storage or debug logging.' >&2
+        exit 1
+      fi
+      if grep -REn '(resume|renew|refund|credit|payout)' apps/customer-web-next/src/components/subscription-manager.tsx; then
+        echo 'ERROR: Unsupported subscription product action was introduced.' >&2
+        exit 1
+      fi
+      echo 'Customer subscription lifecycle gates passed.'
+    displayName: Verify subscription safety gates

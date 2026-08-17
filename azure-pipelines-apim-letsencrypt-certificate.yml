@@ -1,0 +1,99 @@
+trigger: none
+pr: none
+
+schedules:
+  - cron: "30 2 * * 0"
+    displayName: Weekly APIM TLS certificate renewal check
+    branches:
+      include:
+        - main
+    always: true
+
+parameters:
+  - name: confirmProductionCertificateOperation
+    type: boolean
+    default: false
+  - name: forceIssue
+    type: boolean
+    default: false
+  - name: letsEncryptContactEmail
+    type: string
+    default: support@craves.in
+
+variables:
+  subscriptionId: 4f897b61-9b52-44b4-8cf1-bdac281cc1aa
+  resourceGroup: rg-craves-prodlow-centralindia
+  dnsZoneName: _acme-challenge.api.craves.in
+  keyVaultName: kvcravesprodlowl3ing6
+  keyVaultCertificateName: craves-api-tls
+  apimName: apim-craves-prodlow-l3ing6
+  apimHostname: api.craves.in
+  apimDefaultHostname: api.craves.in
+  acmeShVersion: 3.1.4
+  renewBeforeDays: 30
+  dnsPropagationSeconds: 60
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    fetchDepth: 1
+
+  - bash: |
+      set -euo pipefail
+
+      packages=()
+      command -v dig >/dev/null 2>&1 || packages+=(dnsutils)
+      command -v shellcheck >/dev/null 2>&1 || packages+=(shellcheck)
+
+      if [[ ${#packages[@]} -gt 0 ]]; then
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends "${packages[@]}"
+      fi
+
+      bash -n infra/certificates/apim-letsencrypt/renew-apim-certificate.sh
+      shellcheck infra/certificates/apim-letsencrypt/renew-apim-certificate.sh
+    displayName: Validate certificate automation script
+
+  - task: AzureCLI@2
+    displayName: Issue or renew APIM certificate
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      addSpnToEnvironment: false
+      inlineScript: |
+        set -Eeuo pipefail
+        set +x
+
+        confirmation='${{ parameters.confirmProductionCertificateOperation }}'
+        force_issue='${{ parameters.forceIssue }}'
+        build_reason='$(Build.Reason)'
+
+        if [[ "${build_reason,,}" != 'schedule' && "${confirmation,,}" != 'true' ]]; then
+          echo 'ERROR: Manual runs require confirmProductionCertificateOperation=true.' >&2
+          exit 2
+        fi
+
+        if [[ "${build_reason,,}" == 'schedule' && "${force_issue,,}" == 'true' ]]; then
+          echo 'ERROR: Scheduled runs cannot force certificate issuance.' >&2
+          exit 2
+        fi
+
+        export SUBSCRIPTION_ID='$(subscriptionId)'
+        export RESOURCE_GROUP='$(resourceGroup)'
+        export DNS_ZONE_NAME='$(dnsZoneName)'
+        export KEY_VAULT_NAME='$(keyVaultName)'
+        export KEY_VAULT_CERTIFICATE_NAME='$(keyVaultCertificateName)'
+        export APIM_NAME='$(apimName)'
+        export APIM_HOSTNAME='$(apimHostname)'
+        export APIM_DEFAULT_HOSTNAME='$(apimDefaultHostname)'
+        export LETSENCRYPT_CONTACT_EMAIL='${{ parameters.letsEncryptContactEmail }}'
+        export ACME_SH_VERSION='$(acmeShVersion)'
+        export RENEW_BEFORE_DAYS='$(renewBeforeDays)'
+        export DNS_PROPAGATION_SECONDS='$(dnsPropagationSeconds)'
+        export FORCE_ISSUE="$force_issue"
+
+        bash infra/certificates/apim-letsencrypt/renew-apim-certificate.sh

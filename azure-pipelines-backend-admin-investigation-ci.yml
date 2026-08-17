@@ -1,0 +1,47 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/order-service
+      mvn -B -ntp clean verify
+    displayName: Verify Order Service admin operations
+
+  - bash: |
+      set -euo pipefail
+      cd services/integration-service
+      mvn -B -ntp clean verify
+    displayName: Verify Integration Service admin operations
+
+  - bash: |
+      set -euo pipefail
+      files=(
+        services/order-service/src/main/java/in/craves/order/admin/AdminOrderInvestigationController.java
+        services/integration-service/src/main/java/in/craves/integration/admin/AdminIntegrationInvestigationController.java
+      )
+      for file in "${files[@]}"; do
+        grep -F 'X-Admin-Reason' "$file"
+        grep -F 'X-Correlation-ID' "$file"
+        grep -F 'CacheControl.noStore()' "$file"
+        grep -F 'hasRole("ADMIN")' "$file"
+        if grep -E 'raw_payload|request_payload|response_payload|provider_payload|device_token|tracking_url' "$file"; then
+          echo "Sensitive raw payload or token field exposed by $file" >&2
+          exit 1
+        fi
+      done
+      grep -F 'Append-only audit' services/order-service/src/main/resources/db/migration/V12__admin_investigation_audit.sql
+      grep -F 'Append-only audit' services/integration-service/src/main/resources/db/migration/V106__admin_investigation_audit.sql
+    displayName: Verify admin privacy and audit boundaries

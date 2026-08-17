@@ -1,0 +1,38 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    displayName: Use Node.js 24
+    inputs:
+      versionSpec: '24.x'
+  - script: |
+      set -euo pipefail
+      cd apps/mobile/customer-app
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+    displayName: Typecheck and test mobile auth foundation
+  - script: |
+      set -euo pipefail
+      bash -n scripts/mobile/bootstrap-customer-mobile-native.sh
+      grep -q 'react-native-keychain' apps/mobile/customer-app/package.json
+      grep -q 'WHEN_UNLOCKED_THIS_DEVICE_ONLY' apps/mobile/customer-app/src/auth/session-store.ts
+      grep -q 'firebase/exchange' apps/mobile/customer-app/src/auth/craves-auth.ts
+      mapfile -d '' RUNTIME_FILES < <(find apps/mobile/customer-app/src -type f \( -name '*.ts' -o -name '*.tsx' \) ! -name '*.test.ts' -print0)
+      if grep -En '(AsyncStorage|localStorage|sessionStorage).*token|console\.(log|debug).*token|refreshToken' "${RUNTIME_FILES[@]}"; then
+        echo 'ERROR: Mobile auth runtime contains unsafe token storage or logging.' >&2
+        exit 1
+      fi
+      for FILE in google-services.json GoogleService-Info.plist; do
+        if find apps/mobile/customer-app -name "$FILE" -print -quit | grep -q .; then
+          echo "ERROR: Firebase native config file $FILE must not be committed." >&2
+          exit 1
+        fi
+      done
+      echo 'Mobile auth and native bootstrap safety controls passed.'
+    displayName: Verify secure storage and native-config controls

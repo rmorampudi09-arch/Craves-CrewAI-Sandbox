@@ -1,0 +1,91 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-order-delivery-status-apim.sh
+      bash -n scripts/apim/verify-order-delivery-status-apim.sh
+      bash -n scripts/apim/rollback-order-delivery-status-apim.sh
+    displayName: Validate APIM Bash scripts
+
+  - script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json
+      import pathlib
+      import xml.etree.ElementTree as ET
+
+      root = pathlib.Path('.')
+      contract = root / 'contracts/openapi/order-delivery-status-v1.openapi.json'
+      policy = root / 'infra/apim/order-delivery-status/order-delivery-status-policy.xml'
+
+      with contract.open(encoding='utf-8') as stream:
+          document = json.load(stream)
+
+      expected_path = '/api/v1/orders/{orderId}/delivery-status'
+      assert document['openapi'] == '3.0.3'
+      operation = document['paths'][expected_path]['get']
+      assert operation['operationId'] == 'getOrderDeliveryStatus'
+      assert operation['security'] == [{'bearerAuth': []}]
+      assert document['components']['securitySchemes']['bearerAuth']['scheme'] == 'bearer'
+      assert set(operation['responses']) >= {'200', '401', '403', '404'}
+      response_schema = document['components']['schemas']['DeliveryStatusResponse']
+      assert set(response_schema['required']) == {'orderId', 'history'}
+      assert response_schema['properties']['history']['maxItems'] == 100
+
+      ET.parse(policy)
+      policy_text = policy.read_text(encoding='utf-8')
+      required = [
+          'Authorization',
+          'Bearer ',
+          '__ORDER_DELIVERY_STATUS_BACKEND_URL__',
+          'AUTHENTICATION_REQUIRED',
+          'no-store',
+          'X-Content-Type-Options',
+      ]
+      for token in required:
+          assert token in policy_text, f'missing policy token: {token}'
+      assert '<cors' not in policy_text.lower(), 'module must not add permissive CORS policy'
+      print('OpenAPI and APIM policy validation passed.')
+      PY
+    displayName: Validate OpenAPI and APIM policy XML
+
+  - script: |
+      set -euo pipefail
+      CONFIGURE='scripts/apim/configure-order-delivery-status-apim.sh'
+      VERIFY='scripts/apim/verify-order-delivery-status-apim.sh'
+      ROLLBACK='scripts/apim/rollback-order-delivery-status-apim.sh'
+
+      grep -q 'Multiple APIs already use the intended public path' "$CONFIGURE"
+      grep -q 'will not relax an existing API-wide security setting' "$CONFIGURE"
+      grep -q 'CRAVES_DELIVERY_STATUS_CONSUMER_ENABLED' "$CONFIGURE"
+      grep -q 'inherited set-backend-service backend-id policy' "$CONFIGURE"
+      grep -q 'reject_incompatible_backend_inheritance' "$VERIFY"
+      grep -q 'AUTHENTICATION_REQUIRED' "$VERIFY"
+      grep -q 'CONFIRM_OPERATION_ROLLBACK' "$ROLLBACK"
+      grep -q 'DELETE_EMPTY_DEDICATED_API' "$ROLLBACK"
+
+      if grep -Eq '(BORZO_API_ENABLED=true|CRAVES_DELIVERY_COMMAND_ENABLED=true|CRAVES_DELIVERY_WEBHOOK_PROCESSING_ENABLED=true|CRAVES_DELIVERY_TRACKING_RECONCILIATION_ENABLED=true)' \
+        "$CONFIGURE" "$VERIFY" "$ROLLBACK"; then
+        echo 'ERROR: APIM scripts must not activate delivery execution or Borzo.' >&2
+        exit 1
+      fi
+
+      if grep -REn '(accesskey=|client-secret[^a-zA-Z]|password=|Bearer [A-Za-z0-9_-]{20,})' \
+        infra/apim/order-delivery-status \
+        scripts/apim/configure-order-delivery-status-apim.sh \
+        scripts/apim/verify-order-delivery-status-apim.sh \
+        scripts/apim/rollback-order-delivery-status-apim.sh \
+        contracts/openapi/order-delivery-status-v1.openapi.json; then
+        echo 'ERROR: Possible credential literal detected.' >&2
+        exit 1
+      fi
+
+      echo 'APIM safety-control validation passed.'
+    displayName: Verify fail-closed APIM controls

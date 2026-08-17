@@ -1,0 +1,37 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmKeepSubscriptionWarm
+    type: boolean
+    default: false
+  - name: resourceGroupName
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: containerAppName
+    type: string
+    default: ca-craves-subscription-service-p
+  - name: desiredMinReplicas
+    type: number
+    default: 1
+    values:
+      - 1
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: AzureCLI@2
+    displayName: Keep Subscription Service warm and verify latency
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: scripts/release/configure-subscription-warm-runtime.sh
+    env:
+      RG: ${{ parameters.resourceGroupName }}
+      APP: ${{ parameters.containerAppName }}
+      DESIRED_MIN_REPLICAS: ${{ parameters.desiredMinReplicas }}
+      CONFIRM_KEEP_SUBSCRIPTION_WARM: ${{ parameters.confirmKeepSubscriptionWarm }}

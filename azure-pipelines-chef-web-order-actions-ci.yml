@@ -1,0 +1,33 @@
+trigger: none
+pr: none
+pool:
+  vmImage: ubuntu-latest
+steps:
+  - checkout: self
+  - task: NodeTool@0
+    inputs:
+      versionSpec: '24.x'
+    displayName: Use Node.js 24
+  - script: |
+      set -euo pipefail
+      cd apps/customer-web-next
+      npm install --ignore-scripts
+      npm run typecheck
+      npm run test
+      npm run build
+    displayName: Build and test chef order actions
+  - script: |
+      set -euo pipefail
+      bash -n scripts/apim/configure-chef-order-actions-apim.sh
+      grep -q 'Idempotency-Key' apps/customer-web-next/src/app/api/chef/orders/'[orderId]'/accept/route.ts
+      grep -q 'X-Correlation-ID' apps/customer-web-next/src/app/api/chef/orders/'[orderId]'/reject/route.ts
+      if grep -REn '(refund|cancel|out-for-delivery|provider|localStorage|sessionStorage|console\.(log|debug))' \
+        apps/customer-web-next/src/components/chef-order-actions.tsx \
+        apps/customer-web-next/src/app/api/chef/orders/'[orderId]'/accept \
+        apps/customer-web-next/src/app/api/chef/orders/'[orderId]'/reject \
+        apps/customer-web-next/src/app/api/chef/orders/'[orderId]'/ready-for-pickup; then
+        echo 'ERROR: Chef action runtime introduces unsupported transitions/provider behavior or insecure storage/logging.' >&2
+        exit 1
+      fi
+      echo 'Chef action transition and idempotency gates passed.'
+    displayName: Verify chef action safety gates

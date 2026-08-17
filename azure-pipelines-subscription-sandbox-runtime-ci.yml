@@ -1,0 +1,219 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      bash -n scripts/release/subscription-sandbox-runtime-preflight.sh
+      bash -n scripts/release/subscription-sandbox-runtime-activate.sh
+      bash -n scripts/release/subscription-sandbox-runtime-status.sh
+      bash -n scripts/release/subscription-sandbox-runtime-rollback.sh
+      bash -n scripts/apim/configure-subscription-payments-apim.sh
+      bash -n scripts/apim/status-subscription-payments-apim.sh
+      bash -n scripts/apim/rollback-subscription-payments-apim.sh
+      if grep -n 'mktemp' \
+        scripts/release/subscription-sandbox-runtime-preflight.sh \
+        scripts/release/subscription-sandbox-runtime-activate.sh \
+        scripts/release/subscription-sandbox-runtime-status.sh; then
+        echo 'ERROR: Runtime health probes must not depend on mktemp in AzureCLI task execution.' >&2
+        exit 1
+      fi
+      python3 - <<'PY'
+      from pathlib import Path
+      import re
+      runtime_scripts = (
+          Path('scripts/release/subscription-sandbox-runtime-preflight.sh'),
+          Path('scripts/release/subscription-sandbox-runtime-activate.sh'),
+          Path('scripts/release/subscription-sandbox-runtime-status.sh'),
+      )
+      for path in runtime_scripts:
+          text = path.read_text()
+          if re.search(r'(?m)^\s*local\b[^\n]*\bPATH\s*=', text):
+              raise SystemExit(f'{path}: must not declare a local PATH variable; it breaks executable lookup inside Bash functions')
+      import xml.etree.ElementTree as ET
+      for path in (
+          'infra/apim/subscription-payments/authenticated-policy.xml',
+          'infra/apim/subscription-payments/cashfree-webhook-policy.xml',
+      ):
+          ET.parse(path)
+          print(f'Valid XML: {path}')
+      PY
+    displayName: Validate activation and APIM assets
+
+  - bash: |
+      set -euo pipefail
+      python3 - <<'PY'
+      from pathlib import Path
+      text = Path('scripts/release/subscription-sandbox-runtime-activate.sh').read_text()
+      required_order = [
+          'Integration downstream',
+          'Subscription payment-status downstream',
+          'Order subscription downstream',
+          'Integration sandbox payment execution',
+          'Subscription upstream runtime',
+      ]
+      positions = [text.index(item) for item in required_order]
+      if positions != sorted(positions):
+          raise SystemExit('Activation is not downstream-first')
+      forbidden = (
+          'CRAVES_CASHFREE_PRODUCTION_ACTIVATION_APPROVED=true',
+          'CRAVES_CASHFREE_PRODUCTION_PAYMENT_EXECUTION_ENABLED=true',
+          'PAYMENT_PROVIDER_ENVIRONMENT=production',
+      )
+      for value in forbidden:
+          if value in text:
+              raise SystemExit(f'Forbidden production Cashfree activation found: {value}')
+      webhook = Path('infra/apim/subscription-payments/cashfree-webhook-policy.xml').read_text()
+      if '<set-body' in webhook or 'A Bearer access token is required' in webhook:
+          raise SystemExit('Cashfree webhook policy must preserve raw body and remain provider-public')
+      print('Sandbox-only/downstream-first activation safety: PASS')
+      PY
+      if grep -REn '(x-client-secret[[:space:]]*[:=][[:space:]]*[A-Za-z0-9]|PAYMENT_PROVIDER_CLIENT_KEY[[:space:]]*=[[:space:]]*[^$"{])' \
+        scripts/release/subscription-sandbox-runtime-* infra/apim/subscription-payments scripts/apim/*subscription-payments*; then
+        echo 'ERROR: Potential Cashfree credential literal found.' >&2
+        exit 1
+      fi
+    displayName: Verify sandbox-only safety gates
+
+  - bash: |
+      set -uo pipefail
+      cd services/subscription-service
+      set +e
+      mvn -B -ntp clean verify
+      rc=$?
+      set -e
+      if [ "$rc" -ne 0 ]; then
+        echo '============================================================'
+        echo 'SUBSCRIPTION SERVICE SUREFIRE FAILURE REPORTS'
+        echo '============================================================'
+        if compgen -G 'target/surefire-reports/*.txt' > /dev/null; then
+          for report in target/surefire-reports/*.txt; do
+            if grep -Eq 'Failures: [1-9]|Errors: [1-9]|<<< FAILURE|<<< ERROR' "$report"; then
+              echo "-------------------- $report --------------------"
+              cat "$report"
+            fi
+          done
+        else
+          echo 'No Surefire .txt reports were produced.'
+        fi
+        echo '============================================================'
+        echo 'SUREFIRE XML FAILURE/ERROR SUMMARY'
+        echo '============================================================'
+        if compgen -G 'target/surefire-reports/TEST-*.xml' > /dev/null; then
+          python3 - <<'PY'
+      from pathlib import Path
+      import xml.etree.ElementTree as ET
+      for path in sorted(Path('target/surefire-reports').glob('TEST-*.xml')):
+          try:
+              root = ET.parse(path).getroot()
+          except Exception as exc:
+              print(f'{path}: unable to parse: {exc}')
+              continue
+          failures = int(root.attrib.get('failures', '0'))
+          errors = int(root.attrib.get('errors', '0'))
+          if failures or errors:
+              print(f'{path}: tests={root.attrib.get("tests")} failures={failures} errors={errors}')
+              for case in root.findall('.//testcase'):
+                  problem = case.find('failure')
+                  if problem is None:
+                      problem = case.find('error')
+                  if problem is not None:
+                      print(f'  {case.attrib.get("classname")}.{case.attrib.get("name")}')
+                      print((problem.text or problem.attrib.get('message', '')).strip())
+      PY
+        fi
+        exit "$rc"
+      fi
+    displayName: Verify Subscription Service
+
+  - task: PublishTestResults@2
+    displayName: Publish Subscription Service test results
+    condition: always()
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: 'services/subscription-service/target/surefire-reports/TEST-*.xml'
+      testRunTitle: 'Subscription Service - sandbox runtime CI'
+      failTaskOnFailedTests: false
+      failTaskOnMissingResultsFile: false
+
+  - bash: |
+      set -uo pipefail
+      cd services/integration-service
+      set +e
+      mvn -B -ntp clean verify
+      rc=$?
+      set -e
+      if [ "$rc" -ne 0 ]; then
+        echo '============================================================'
+        echo 'INTEGRATION SERVICE SUREFIRE FAILURE REPORTS'
+        echo '============================================================'
+        if compgen -G 'target/surefire-reports/*.txt' > /dev/null; then
+          for report in target/surefire-reports/*.txt; do
+            if grep -Eq 'Failures: [1-9]|Errors: [1-9]|<<< FAILURE|<<< ERROR' "$report"; then
+              echo "-------------------- $report --------------------"
+              cat "$report"
+            fi
+          done
+        else
+          echo 'No Surefire .txt reports were produced.'
+        fi
+        exit "$rc"
+      fi
+    displayName: Verify Integration Service
+
+  - task: PublishTestResults@2
+    displayName: Publish Integration Service test results
+    condition: always()
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: 'services/integration-service/target/surefire-reports/TEST-*.xml'
+      testRunTitle: 'Integration Service - sandbox runtime CI'
+      failTaskOnFailedTests: false
+      failTaskOnMissingResultsFile: false
+
+  - bash: |
+      set -uo pipefail
+      cd services/order-service
+      set +e
+      mvn -B -ntp clean verify
+      rc=$?
+      set -e
+      if [ "$rc" -ne 0 ]; then
+        echo '============================================================'
+        echo 'ORDER SERVICE SUREFIRE FAILURE REPORTS'
+        echo '============================================================'
+        if compgen -G 'target/surefire-reports/*.txt' > /dev/null; then
+          for report in target/surefire-reports/*.txt; do
+            if grep -Eq 'Failures: [1-9]|Errors: [1-9]|<<< FAILURE|<<< ERROR' "$report"; then
+              echo "-------------------- $report --------------------"
+              cat "$report"
+            fi
+          done
+        else
+          echo 'No Surefire .txt reports were produced.'
+        fi
+        exit "$rc"
+      fi
+    displayName: Verify Order Service
+
+  - task: PublishTestResults@2
+    displayName: Publish Order Service test results
+    condition: always()
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: 'services/order-service/target/surefire-reports/TEST-*.xml'
+      testRunTitle: 'Order Service - sandbox runtime CI'
+      failTaskOnFailedTests: false
+      failTaskOnMissingResultsFile: false

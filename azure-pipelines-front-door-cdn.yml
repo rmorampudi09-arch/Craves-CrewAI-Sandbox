@@ -1,0 +1,78 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: action
+    displayName: Action
+    type: string
+    default: discover
+    values:
+      - discover
+      - deploy
+      - validate
+      - prepareDomains
+      - associateDomains
+  - name: confirmPremium
+    displayName: Type PROVISION_PREMIUM_AFD for billable Premium create/upgrade
+    type: string
+    default: DO_NOT_PROVISION_PREMIUM
+  - name: wafMode
+    displayName: WAF mode
+    type: string
+    default: Detection
+    values:
+      - Detection
+      - Prevention
+  - name: confirmDomains
+    displayName: Type PREPARE_CRAVES_DOMAINS for Key Vault/custom-domain preparation
+    type: string
+    default: DO_NOT_PREPARE_DOMAINS
+  - name: confirmAssociate
+    displayName: Type ASSOCIATE_CRAVES_DOMAINS after both Front Door domains are Approved
+    type: string
+    default: DO_NOT_ASSOCIATE_DOMAINS
+  - name: logAnalyticsWorkspaceName
+    displayName: Existing Log Analytics workspace name, or AUTO_DETECT
+    type: string
+    default: AUTO_DETECT
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  resourceGroup: rg-craves-prodlow-centralindia
+  webContainerApp: ca-craves-web-prodlow
+  frontDoorProfile: afd-craves-prodlow
+  keyVaultName: kvcravesprodlowl3ing6
+  certificateSecretName: craves-web-tls
+
+steps:
+  - checkout: self
+
+  - task: AzureCLI@2
+    displayName: Craves production Azure Front Door / CDN
+    inputs:
+      azureSubscription: Craves-Dev-Service-Connection
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: infra/frontdoor/production/run-front-door-production.sh
+    env:
+      ACTION: ${{ parameters.action }}
+      RESOURCE_GROUP: $(resourceGroup)
+      WEB_CONTAINER_APP: $(webContainerApp)
+      FRONT_DOOR_PROFILE: $(frontDoorProfile)
+      KEY_VAULT_NAME: $(keyVaultName)
+      CERTIFICATE_SECRET_NAME: $(certificateSecretName)
+      WAF_MODE: ${{ parameters.wafMode }}
+      CONFIRM_PREMIUM: ${{ parameters.confirmPremium }}
+      CONFIRM_DOMAINS: ${{ parameters.confirmDomains }}
+      CONFIRM_ASSOCIATE: ${{ parameters.confirmAssociate }}
+      LOG_ANALYTICS_WORKSPACE_NAME: ${{ parameters.logAnalyticsWorkspaceName }}
+      ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/craves-frontdoor-status
+
+  - task: PublishPipelineArtifact@1
+    displayName: Publish Craves Front Door status and DNS handoff
+    condition: always()
+    inputs:
+      targetPath: $(Build.ArtifactStagingDirectory)/craves-frontdoor-status
+      artifact: craves-frontdoor-status

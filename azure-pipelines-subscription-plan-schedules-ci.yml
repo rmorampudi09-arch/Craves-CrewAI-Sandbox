@@ -1,0 +1,36 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - task: JavaToolInstaller@0
+    displayName: Use Java 21
+    inputs:
+      versionSpec: '21'
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - bash: |
+      set -euo pipefail
+      cd services/subscription-service
+      mvn -B -ntp -DskipTests=false verify
+    displayName: Verify subscription plan schedules
+
+  - bash: |
+      set -euo pipefail
+      migration=services/subscription-service/src/main/resources/db/migration/V3__subscription_plan_schedule.sql
+      grep -Fq "recurrence_type IN ('WEEKLY', 'MONTHLY')" "$migration"
+      grep -Fq 'generation_lead_hours BETWEEN 1 AND 168' "$migration"
+      grep -Fq "status IN ('DRAFT', 'ACTIVE', 'INACTIVE')" "$migration"
+      if grep -RInE 'generation-lead-hours:[[:space:]]*[0-9]+|service-time:[[:space:]]*[0-9]+' \
+        services/subscription-service/src/main/resources; then
+        echo 'ERROR: Schedule product values must not be hard-coded.' >&2
+        exit 1
+      fi
+    displayName: Verify explicit schedule boundaries

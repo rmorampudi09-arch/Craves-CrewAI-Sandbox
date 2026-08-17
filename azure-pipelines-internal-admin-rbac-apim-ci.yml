@@ -1,0 +1,12 @@
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - script: |
+      set -euo pipefail
+      bash scripts/release/validate-internal-admin-rbac.sh
+    displayName: Verify internal administrator APIM assets

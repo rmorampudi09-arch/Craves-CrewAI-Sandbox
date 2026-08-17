@@ -1,0 +1,52 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: confirmation
+    displayName: Type DISABLE_INTERNAL_ADMIN_RBAC
+    type: string
+    default: DO_NOT_DISABLE
+  - name: resourceGroupName
+    displayName: Azure resource group
+    type: string
+    default: rg-craves-prodlow-centralindia
+  - name: authContainerAppName
+    displayName: Auth Service Container App
+    type: string
+    default: ca-craves-auth-service-prodlow
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: Disable
+    jobs:
+      - job: DisableAuthRoleManagement
+        displayName: Disable Auth Service internal-role management
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              [[ '${{ parameters.confirmation }}' == 'DISABLE_INTERNAL_ADMIN_RBAC' ]] || {
+                echo 'ERROR: explicit RBAC rollback confirmation is required.' >&2
+                exit 1
+              }
+            displayName: Verify rollback confirmation
+          - task: AzureCLI@2
+            displayName: Disable internal administrator role management
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                set +x
+                resource_group='${{ parameters.resourceGroupName }}'
+                app='${{ parameters.authContainerAppName }}'
+                az containerapp update \
+                  -g "$resource_group" \
+                  -n "$app" \
+                  --set-env-vars CRAVES_INTERNAL_ADMIN_RBAC_API_ENABLED=false \
+                  --only-show-errors >/dev/null
+                bash scripts/release/smoke-containerapp-health.sh "$resource_group" "$app"
+                echo 'Internal role-management API disabled; assignments and audit evidence were preserved.'
