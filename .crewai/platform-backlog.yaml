@@ -2,7 +2,7 @@ workstreams:
   - id: ci_architecture_foundation
     status: PENDING
   - id: admin_console_foundation
-    status: PENDING
+    status: COMPLETE
   - id: admin_rbac_audit
     status: PENDING
   - id: admin_chef_operations
