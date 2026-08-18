@@ -1,0 +1,14 @@
+{
+  "buildTrain": "CRAVES_FULL_PLATFORM",
+  "status": "NOT_STARTED",
+  "currentPackage": null,
+  "currentBranch": null,
+  "currentPullRequest": null,
+  "completedPackages": [],
+  "blockedPackages": [],
+  "nextPackage": null,
+  "lastSuccessfulPackage": null,
+  "finalRegression": "NOT_STARTED",
+  "documentation": "NOT_STARTED",
+  "finalState": "PENDING"
+}
