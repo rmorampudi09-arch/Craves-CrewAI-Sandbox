@@ -1,14 +1,16 @@
 {
   "buildTrain": "CRAVES_FULL_PLATFORM",
-  "status": "NOT_STARTED",
-  "currentPackage": null,
-  "currentBranch": null,
+  "status": "IN_PROGRESS",
+  "currentPackage": "admin_console_foundation",
+  "currentBranch": "crewai/full-autonomous-sandbox-build-train",
   "currentPullRequest": null,
-  "completedPackages": [],
+  "completedPackages": [
+    "admin_console_foundation"
+  ],
   "blockedPackages": [],
-  "nextPackage": null,
-  "lastSuccessfulPackage": null,
-  "finalRegression": "NOT_STARTED",
-  "documentation": "NOT_STARTED",
+  "nextPackage": "admin_rbac_audit",
+  "lastSuccessfulPackage": "admin_console_foundation",
+  "finalRegression": "TEST_EXECUTION_PENDING_FINAL_VERIFICATION",
+  "documentation": "IN_PROGRESS",
   "finalState": "PENDING"
 }
