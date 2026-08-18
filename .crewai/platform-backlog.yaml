@@ -1,0 +1,43 @@
+workstreams:
+  - id: ci_architecture_foundation
+    status: PENDING
+  - id: admin_console_foundation
+    status: PENDING
+  - id: admin_rbac_audit
+    status: PENDING
+  - id: admin_chef_operations
+    status: PENDING
+  - id: admin_customer_support_operations
+    status: PENDING
+  - id: admin_catalog_menu_operations
+    status: PENDING
+  - id: admin_order_fulfilment_operations
+    status: PENDING
+  - id: admin_razorpay_operations
+    status: PENDING
+  - id: admin_delivery_operations
+    status: PENDING
+  - id: payment_integration_completion
+    status: PENDING
+  - id: delivery_provider_integration_completion
+    status: PENDING
+  - id: notification_integration_completion
+    status: PENDING
+  - id: backend_gap_completion
+    status: PENDING
+  - id: customer_web_completion
+    status: PENDING
+  - id: chef_web_completion
+    status: PENDING
+  - id: mobile_completion
+    status: PENDING
+  - id: analytics_observability
+    status: PENDING
+  - id: security_hardening
+    status: PENDING
+  - id: resilience_performance_scalability
+    status: PENDING
+  - id: full_platform_e2e_regression
+    status: PENDING
+  - id: final_documentation_handover
+    status: PENDING
