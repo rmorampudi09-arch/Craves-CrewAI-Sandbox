@@ -1,0 +1,30 @@
+sandbox_repository: rmorampudi09-arch/Craves-CrewAI-Sandbox
+production_repository: rmorampudi09-arch/Craves-Build-platform
+
+sandbox_auto_commit: true
+sandbox_auto_push: true
+sandbox_auto_pr: true
+sandbox_auto_merge: true
+auto_continue_next_package: true
+
+production_deployment: false
+production_repository_write: false
+
+admin_console_priority: highest
+
+razorpay:
+  retain: true
+  remove: false
+
+third_party_integrations:
+  complete_existing_and_documented: true
+  invent_new_vendors: false
+
+business_rules:
+  pricing: PRODUCT_DECISION_REQUIRED
+  commissions: PRODUCT_DECISION_REQUIRED
+  delivery_radius: PRODUCT_DECISION_REQUIRED
+  delivery_fees: PRODUCT_DECISION_REQUIRED
+  refund_policy: PRODUCT_DECISION_REQUIRED
+  cancellation_policy: PRODUCT_DECISION_REQUIRED
+  fssai_policy: PRODUCT_DECISION_REQUIRED
