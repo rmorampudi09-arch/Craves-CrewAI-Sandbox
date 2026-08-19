@@ -33,7 +33,7 @@ export const buildTrainConfig = {
   activeDomains: ['backend', 'web', 'mobile', 'database', 'integrations', 'cloud'] as const,
   branchName: 'crewai/full-build-train-request',
   canonicalWebModule: 'apps/customer-web-next',
-  forbiddenRuntimeDirection: 'No Node.js backend path',
+  forbiddenRuntimeDirection: 'No Node.js backend production path',
   workstreams: [
     {
       key: 'backend',
