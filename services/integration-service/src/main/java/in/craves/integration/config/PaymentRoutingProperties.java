@@ -8,6 +8,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class PaymentRoutingProperties {
+    private static final Set<String> SUPPORTED_PROVIDERS = Set.of("RAZORPAY");
+
     private final String activeProvider;
     private final boolean cashfreeEnabled;
     private final boolean razorpayEnabled;
@@ -24,14 +26,14 @@ public class PaymentRoutingProperties {
 
     @PostConstruct
     void validate() {
-        if (!Set.of("CASHFREE", "RAZORPAY").contains(provider())) {
-            throw new IllegalStateException("PAYMENT_PROVIDER_NAME must be CASHFREE or RAZORPAY");
+        if (!SUPPORTED_PROVIDERS.contains(provider())) {
+            throw new IllegalStateException("PAYMENT_PROVIDER_NAME must be RAZORPAY for the active production runtime");
         }
-        if ("CASHFREE".equals(provider()) && !cashfreeEnabled) {
-            throw new IllegalStateException("CASHFREE_API_ENABLED must be true when Cashfree is active");
+        if (cashfreeEnabled) {
+            throw new IllegalStateException("CASHFREE_API_ENABLED must remain false because Cashfree is dormant for launch");
         }
-        if ("RAZORPAY".equals(provider()) && !razorpayEnabled) {
-            throw new IllegalStateException("RAZORPAY_API_ENABLED must be true when Razorpay is active");
+        if (!razorpayEnabled) {
+            throw new IllegalStateException("RAZORPAY_API_ENABLED must be true when Razorpay is the active provider");
         }
     }
 
@@ -40,7 +42,7 @@ public class PaymentRoutingProperties {
     }
 
     public boolean razorpay() { return "RAZORPAY".equals(provider()); }
-    public boolean cashfree() { return "CASHFREE".equals(provider()); }
+    public boolean cashfree() { return false; }
     public boolean cashfreeEnabled() { return cashfreeEnabled; }
     public boolean razorpayEnabled() { return razorpayEnabled; }
 }
