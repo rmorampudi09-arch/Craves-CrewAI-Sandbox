@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-const activeDomains = ["backend", "web", "mobile", "database", "integrations", "cloud"] as const;
+const activeDomains = [
+  "backend",
+  "web",
+  "mobile",
+  "database",
+  "integrations",
+  "cloud",
+] as const;
+
 const canonicalWebModule = "apps/customer-web-next";
 const forbiddenRuntime = "Node.js backend";
 const orderedMilestones = [
   "Architecture lock and repo guardrails",
   "Infra deployability alignment",
   "Auth, session, and RBAC hardening",
-  "Admin closure in customer-web-next"
+  "Admin closure in customer-web-next",
 ] as const;
 
 describe("build train web alignment", () => {
