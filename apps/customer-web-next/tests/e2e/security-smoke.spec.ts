@@ -36,3 +36,8 @@ test("chef route stays non-cacheable", async ({ request }) => {
 
   expect(response.headers()["cache-control"]).toContain("no-store");
 });
+
+test("admin route redirects anonymous users to sign-in", async ({ page }) => {
+  await page.goto("/admin");
+  await expect(page).toHaveURL(/\/sign-in/);
+});
