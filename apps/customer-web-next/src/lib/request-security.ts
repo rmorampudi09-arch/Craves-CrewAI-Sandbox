@@ -1,4 +1,4 @@
-import type { NextRequest } from "next/server";
+import type { NextRequest } from 'next/server';
 
 type OriginCheckInput = {
   origin: string | null;
@@ -11,7 +11,7 @@ type OriginCheckInput = {
 function getLastForwardedValue(value: string | null | undefined): string | null {
   if (!value) return null;
   const values = value
-    .split(",")
+    .split(',')
     .map((part) => part.trim())
     .filter(Boolean);
   return values.at(-1) ?? null;
@@ -21,10 +21,10 @@ function normalizeOrigin(value: string): string | null {
   try {
     const url = new URL(value);
     if (
-      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      (url.protocol !== 'https:' && url.protocol !== 'http:') ||
       url.username ||
       url.password ||
-      url.pathname !== "/" ||
+      url.pathname !== '/' ||
       url.search ||
       url.hash
     ) {
@@ -43,7 +43,7 @@ function resolveForwardedOrigin(
   const proto = getLastForwardedValue(forwardedProto)?.toLowerCase();
   const host = getLastForwardedValue(forwardedHost);
 
-  if ((proto !== "https" && proto !== "http") || !host) {
+  if ((proto !== 'https' && proto !== 'http') || !host) {
     return null;
   }
 
@@ -75,10 +75,10 @@ export function isRequestOriginAllowed(input: OriginCheckInput): boolean {
 
 export function isSameOrigin(request: NextRequest): boolean {
   return isRequestOriginAllowed({
-    origin: request.headers.get("origin"),
+    origin: request.headers.get('origin'),
     requestUrl: request.url,
-    forwardedProto: request.headers.get("x-forwarded-proto"),
-    forwardedHost: request.headers.get("x-forwarded-host"),
-    host: request.headers.get("host"),
+    forwardedProto: request.headers.get('x-forwarded-proto'),
+    forwardedHost: request.headers.get('x-forwarded-host'),
+    host: request.headers.get('host'),
   });
 }
