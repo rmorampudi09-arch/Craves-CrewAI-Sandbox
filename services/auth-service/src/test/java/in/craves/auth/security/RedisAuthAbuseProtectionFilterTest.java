@@ -39,6 +39,23 @@ class RedisAuthAbuseProtectionFilterTest {
     }
 
     @Test
+    void enabledFilterRejectsMissingKeyPrefix() {
+        RedisAuthAbuseProtectionFilter filter = new RedisAuthAbuseProtectionFilter(
+            null,
+            true,
+            10,
+            20,
+            60,
+            false,
+            "  "
+        );
+
+        assertThatThrownBy(filter::validate)
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("key prefix");
+    }
+
+    @Test
     void enabledFilterAcceptsReviewedValues() {
         RedisAuthAbuseProtectionFilter filter = new RedisAuthAbuseProtectionFilter(
             null,
