@@ -9,8 +9,9 @@ export const dynamic = "force-dynamic";
 
 function apiBaseUrl(): string {
   const value = process.env.CRAVES_API_BASE_URL?.trim();
-  if (!value?.startsWith("https://"))
+  if (!value?.startsWith("https://")) {
     throw new Error("CRAVES_API_BASE_URL must use HTTPS");
+  }
   return value.replace(/\/$/, "");
 }
 
@@ -20,11 +21,10 @@ async function call(
   body?: unknown,
 ) {
   const token = request.cookies.get("craves_access_token")?.value;
-  if (!token)
-    return NextResponse.json(
-      { code: "AUTHENTICATION_REQUIRED" },
-      { status: 401 },
-    );
+  if (!token) {
+    return NextResponse.json({ code: "AUTHENTICATION_REQUIRED" }, { status: 401 });
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
@@ -39,11 +39,14 @@ async function call(
       cache: "no-store",
       signal: controller.signal,
     });
-    if (method === "GET" && upstream.status === 404)
+
+    if (method === "GET" && upstream.status === 404) {
       return NextResponse.json(null, {
         status: 200,
         headers: { "Cache-Control": "no-store" },
       });
+    }
+
     if (!upstream.ok) {
       const response = NextResponse.json(
         {
@@ -64,23 +67,32 @@ async function call(
         },
         { status: upstream.status },
       );
-      if (upstream.status === 401)
+
+      if (upstream.status === 401) {
         response.cookies.delete("craves_access_token");
+      }
       return response;
     }
+
     const kitchen = parseChefKitchen(await upstream.json().catch(() => null));
-    if (!kitchen)
+    if (!kitchen) {
       return NextResponse.json(
-        { code: "INVALID_KITCHEN_RESPONSE" },
+        {
+          code: "INVALID_KITCHEN_RESPONSE",
+        },
         { status: 502 },
       );
+    }
+
     const response = NextResponse.json(kitchen);
     response.headers.set("Cache-Control", "no-store");
     return response;
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "AbortError";
     return NextResponse.json(
-      { code: timedOut ? "KITCHEN_TIMEOUT" : "KITCHEN_UNAVAILABLE" },
+      {
+        code: timedOut ? "KITCHEN_TIMEOUT" : "KITCHEN_UNAVAILABLE",
+      },
       { status: timedOut ? 504 : 503 },
     );
   } finally {
@@ -91,11 +103,14 @@ async function call(
 export async function GET(request: NextRequest) {
   return call(request, "GET");
 }
+
 export async function PUT(request: NextRequest) {
-  if (!isSameOrigin(request))
+  if (!isSameOrigin(request)) {
     return NextResponse.json({ code: "ORIGIN_REJECTED" }, { status: 403 });
+  }
+
   const input = parseChefKitchenInput(await request.json().catch(() => null));
-  if (!input)
+  if (!input) {
     return NextResponse.json(
       {
         code: "INVALID_KITCHEN_PROFILE",
@@ -104,5 +119,7 @@ export async function PUT(request: NextRequest) {
       },
       { status: 400 },
     );
+  }
+
   return call(request, "PUT", input);
 }
