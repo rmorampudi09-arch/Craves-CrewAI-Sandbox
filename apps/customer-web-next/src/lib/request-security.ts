@@ -8,13 +8,16 @@ type OriginCheckInput = {
   host?: string | null;
 };
 
-function lastForwardedValue(value: string | null | undefined): string | null {
+function getLastForwardedValue(value: string | null | undefined): string | null {
   if (!value) return null;
-  const values = value.split(",").map((part) => part.trim()).filter(Boolean);
+  const values = value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
   return values.at(-1) ?? null;
 }
 
-function parseOrigin(value: string): string | null {
+function normalizeOrigin(value: string): string | null {
   try {
     const url = new URL(value);
     if (
@@ -33,29 +36,41 @@ function parseOrigin(value: string): string | null {
   }
 }
 
-function forwardedOrigin(
-  proto: string | null | undefined,
-  host: string | null | undefined,
+function resolveForwardedOrigin(
+  forwardedProto: string | null | undefined,
+  forwardedHost: string | null | undefined,
 ): string | null {
-  const publicProto = lastForwardedValue(proto)?.toLowerCase();
-  const publicHost = lastForwardedValue(host);
-  if ((publicProto !== "https" && publicProto !== "http") || !publicHost) return null;
-  return parseOrigin(`${publicProto}://${publicHost}`);
+  const proto = getLastForwardedValue(forwardedProto)?.toLowerCase();
+  const host = getLastForwardedValue(forwardedHost);
+
+  if ((proto !== "https" && proto !== "http") || !host) {
+    return null;
+  }
+
+  return normalizeOrigin(`${proto}://${host}`);
 }
 
 export function isRequestOriginAllowed(input: OriginCheckInput): boolean {
-  if (!input.origin) return false;
-  const suppliedOrigin = parseOrigin(input.origin);
-  if (!suppliedOrigin) return false;
+  if (!input.origin) {
+    return false;
+  }
+
+  const suppliedOrigin = normalizeOrigin(input.origin);
+  if (!suppliedOrigin) {
+    return false;
+  }
 
   try {
-    if (suppliedOrigin === new URL(input.requestUrl).origin) return true;
+    const requestOrigin = new URL(input.requestUrl).origin;
+    if (suppliedOrigin === requestOrigin) {
+      return true;
+    }
   } catch {
     return false;
   }
 
-  const publicHost = input.forwardedHost || input.host;
-  return suppliedOrigin === forwardedOrigin(input.forwardedProto, publicHost);
+  const publicHost = input.forwardedHost ?? input.host;
+  return suppliedOrigin === resolveForwardedOrigin(input.forwardedProto, publicHost);
 }
 
 export function isSameOrigin(request: NextRequest): boolean {
