@@ -1,42 +1,49 @@
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import { resolveRouteAccess, type Persona } from "./lib/route-authorization";
 
-const ADMIN_PATH_PREFIXES = ["/admin", "/api/admin"];
-const CHEF_PATH_PREFIXES = ["/chef", "/api/chef"];
-
-function hasPortalEnabled(path: string): boolean {
-  if (ADMIN_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) {
-    return process.env.CRAVES_ADMIN_PORTAL === "true";
-  }
-
-  if (CHEF_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) {
-    return process.env.CRAVES_CHEF_PORTAL !== "false";
-  }
-
-  return true;
+function readPersona(request: NextRequest): Persona | null {
+  const raw = request.cookies.get("craves_persona")?.value?.toLowerCase();
+  if (raw === "customer" || raw === "chef" || raw === "admin") return raw;
+  return null;
 }
 
-export function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+export function middleware(request: NextRequest) {
+  const persona = readPersona(request);
+  const decision = resolveRouteAccess(request.nextUrl.pathname, persona);
 
-  if (hasPortalEnabled(pathname)) {
-    return NextResponse.next();
+  if (!decision.allowed && decision.redirectTo) {
+    const target = new URL(decision.redirectTo, request.url);
+    const response = NextResponse.redirect(target);
+    response.headers.set("Cache-Control", decision.cacheControl);
+    response.headers.set("X-Robots-Tag", "noindex, nofollow");
+    return response;
   }
 
-  if (pathname.startsWith("/api/")) {
-    return NextResponse.json(
-      { code: "ROUTE_DISABLED", message: "This workspace is not enabled in the current deployment." },
-      { status: 404 },
-    );
+  const response = NextResponse.next();
+  response.headers.set("Cache-Control", decision.cacheControl);
+  if (decision.cacheControl === "private, no-store") {
+    response.headers.set("X-Robots-Tag", "noindex, nofollow");
   }
-
-  if (pathname === "/sign-in") {
-    return NextResponse.next();
-  }
-
-  const fallback = pathname.startsWith("/admin") ? "/home" : "/sign-in?next=/chef";
-  return NextResponse.redirect(new URL(fallback, request.url));
+  response.headers.set("X-Frame-Options", "DENY");
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  return response;
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"],
+  matcher: [
+    "/admin/:path*",
+    "/chef/:path*",
+    "/addresses/:path*",
+    "/cart/:path*",
+    "/checkout/:path*",
+    "/orders/:path*",
+    "/notifications/:path*",
+    "/payment/:path*",
+    "/profile/:path*",
+    "/subscriptions/:path*",
+    "/tracking/:path*",
+    "/wishlist/:path*",
+    "/build-train",
+  ],
 };
