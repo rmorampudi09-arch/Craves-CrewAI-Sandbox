@@ -12,6 +12,14 @@ spring:
       maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE:5}
       minimum-idle: ${SPRING_DATASOURCE_HIKARI_MIN_IDLE:1}
       connection-timeout: 30000
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
+      timeout: ${SPRING_DATA_REDIS_TIMEOUT:2s}
+      ssl:
+        enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}
   jpa:
     open-in-view: false
     hibernate:
@@ -33,6 +41,10 @@ management:
     health:
       probes:
         enabled: true
+      show-details: when_authorized
+  health:
+    redis:
+      enabled: ${MANAGEMENT_HEALTH_REDIS_ENABLED:true}
 
 craves:
   firebase:
@@ -49,6 +61,18 @@ craves:
     allow-generated-local-keys: ${CRAVES_JWT_ALLOW_GENERATED_LOCAL_KEYS:false}
   internal:
     service-secret: ${CRAVES_INTERNAL_SERVICE_SECRET:}
+  production:
+    require-redis: ${CRAVES_PRODUCTION_REQUIRE_REDIS:true}
+    fail-on-missing-secrets: ${CRAVES_PRODUCTION_FAIL_ON_MISSING_SECRETS:true}
+  auth-rate-limit:
+    enabled: ${CRAVES_AUTH_RATE_LIMIT_ENABLED:true}
+    exchange-limit: ${CRAVES_AUTH_RATE_LIMIT_EXCHANGE_LIMIT:10}
+    refresh-limit: ${CRAVES_AUTH_RATE_LIMIT_REFRESH_LIMIT:20}
+    window-seconds: ${CRAVES_AUTH_RATE_LIMIT_WINDOW_SECONDS:60}
+    trust-forwarded-for: ${CRAVES_AUTH_RATE_LIMIT_TRUST_FORWARDED_FOR:false}
+    key-prefix: ${CRAVES_AUTH_RATE_LIMIT_KEY_PREFIX:craves:auth:rate}
+  token-revocation:
+    publisher-enabled: ${CRAVES_TOKEN_REVOCATION_PUBLISHER_ENABLED:false}
   internal-admin-rbac:
     api-enabled: ${CRAVES_INTERNAL_ADMIN_RBAC_API_ENABLED:false}
     maximum-list-size: ${CRAVES_INTERNAL_ADMIN_RBAC_MAXIMUM_LIST_SIZE:100}
