@@ -1,12 +1,37 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { redirect } from "next/navigation";
 import { ArrowLeftRight, ChefHat } from "lucide-react";
 import { CravesLogo } from "@/components/brand/CravesLogo";
 import { ChefWorkspaceNavigation } from "@/components/chef-workspace-navigation";
+import { apiBaseUrl } from "@/lib/server-api";
 
-export default function ChefLayout({
+async function requireChefAccess(): Promise<void> {
+  const response = await fetch(`${apiBaseUrl()}/auth/me`, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  }).catch(() => null);
+
+  if (!response?.ok) {
+    redirect("/sign-in?next=/chef");
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { identity?: { roles?: string[] } }
+    | null;
+
+  const roles = payload?.identity?.roles ?? [];
+  const normalizedRoles = roles.map((role) => role.toUpperCase());
+  if (!normalizedRoles.includes("CHEF") && !normalizedRoles.includes("ADMIN")) {
+    redirect("/home");
+  }
+}
+
+export default async function ChefLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
+  await requireChefAccess();
+
   return (
     <div className="chef-panel-theme">
       <header className="chef-panel-header">
