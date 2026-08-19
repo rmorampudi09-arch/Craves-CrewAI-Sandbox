@@ -1,4 +1,19 @@
+spring:
+  data:
+    redis:
+      ssl:
+        enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:true}
+
 management:
   health:
     redis:
-      enabled: ${MANAGEMENT_HEALTH_REDIS_ENABLED:false}
+      enabled: ${MANAGEMENT_HEALTH_REDIS_ENABLED:true}
+
+craves:
+  production:
+    require-redis: ${CRAVES_PRODUCTION_REQUIRE_REDIS:true}
+    fail-on-missing-secrets: ${CRAVES_PRODUCTION_FAIL_ON_MISSING_SECRETS:true}
+  jwt:
+    allow-generated-local-keys: false
+  auth-rate-limit:
+    enabled: ${CRAVES_AUTH_RATE_LIMIT_ENABLED:true}
