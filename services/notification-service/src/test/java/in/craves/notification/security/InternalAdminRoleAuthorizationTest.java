@@ -16,4 +16,13 @@ class InternalAdminRoleAuthorizationTest {
         assertThat(notificationAdmin.hasAnyRole("PLATFORM_ADMIN", "NOTIFICATION_ADMIN")).isTrue();
         assertThat(notificationAdmin.hasAnyRole("PAYMENTS_ADMIN", "SUBSCRIPTION_ADMIN")).isFalse();
     }
+
+    @Test
+    void doesNotTreatAuthenticatedCustomersAsInternalAdmins() {
+        CravesPrincipal customer = new CravesPrincipal(
+            UUID.randomUUID(), "+919999999999", Set.of("CUSTOMER")
+        );
+
+        assertThat(customer.hasAnyRole("NOTIFICATION_ADMIN", "PLATFORM_ADMIN")).isFalse();
+    }
 }
