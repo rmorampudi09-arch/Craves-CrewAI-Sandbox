@@ -3,6 +3,7 @@ export type AdminIdentity = {
   email: string | null;
   status: string;
   adminEnabled: boolean;
+  roles: string[];
 };
 
 function text(value: unknown, max: number): string | null {
@@ -13,7 +14,7 @@ function text(value: unknown, max: number): string | null {
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -28,9 +29,9 @@ export function parseAdminIdentity(value: unknown): AdminIdentity | null {
   const roles = Array.isArray(raw.roles)
     ? raw.roles
         .filter((role): role is string => typeof role === "string")
-        .map(role => role.trim().toUpperCase())
+        .map((role) => role.trim().toUpperCase())
         .filter(Boolean)
-        .slice(0, 10)
+        .slice(0, 20)
     : [];
 
   if (!status || roles.length === 0) return null;
@@ -39,6 +40,11 @@ export function parseAdminIdentity(value: unknown): AdminIdentity | null {
     displayName: text(raw.displayName, 160),
     email: text(raw.email, 320),
     status,
-    adminEnabled: status === "ACTIVE" && roles.includes("ADMIN")
+    roles,
+    adminEnabled:
+      status === "ACTIVE" &&
+      roles.some((role) =>
+        ["ADMIN", "INTERNAL_ADMIN", "SUPER_ADMIN", "SUPPORT_ADMIN"].includes(role),
+      ),
   };
 }
