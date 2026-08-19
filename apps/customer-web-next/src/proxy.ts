@@ -1,19 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export function proxy(request: NextRequest) {
-  if (process.env.CRAVES_ADMIN_PORTAL !== "true") return NextResponse.next();
+const ADMIN_PATH_PREFIXES = ["/admin", "/api/admin"];
+const CHEF_PATH_PREFIXES = ["/chef", "/api/chef"];
 
-  const path = request.nextUrl.pathname;
-  const allowedPage = path === "/admin" || path.startsWith("/admin/") || path === "/sign-in";
-  const allowedApi = path === "/api/admin" || path.startsWith("/api/admin/") || path === "/api/auth" || path.startsWith("/api/auth/");
-  if (allowedPage || allowedApi) return NextResponse.next();
-
-  if (path.startsWith("/api/")) {
-    return NextResponse.json({ code: "ADMIN_PORTAL_ROUTE_NOT_AVAILABLE" }, { status: 404 });
+function hasPortalEnabled(path: string): boolean {
+  if (ADMIN_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) {
+    return process.env.CRAVES_ADMIN_PORTAL === "true";
   }
-  return NextResponse.redirect(new URL("/admin", request.url));
+
+  if (CHEF_PATH_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) {
+    return process.env.CRAVES_CHEF_PORTAL !== "false";
+  }
+
+  return true;
+}
+
+export function proxy(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  if (hasPortalEnabled(pathname)) {
+    return NextResponse.next();
+  }
+
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json(
+      { code: "ROUTE_DISABLED", message: "This workspace is not enabled in the current deployment." },
+      { status: 404 },
+    );
+  }
+
+  if (pathname === "/sign-in") {
+    return NextResponse.next();
+  }
+
+  const fallback = pathname.startsWith("/admin") ? "/home" : "/sign-in?next=/chef";
+  return NextResponse.redirect(new URL(fallback, request.url));
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"]
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"],
 };
