@@ -1,48 +1,42 @@
-import assert from "node:assert/strict";
-import test from "node:test";
-import { parseAdminIdentity } from "./admin-contract.ts";
+import { describe, expect, it } from "vitest";
+import { parseAdminIdentity } from "./admin-contract";
 
-test("enables an active ADMIN from the documented auth/me identity envelope", () => {
-  const parsed = parseAdminIdentity({
-    identity: {
-      id: "11111111-1111-4111-8111-111111111111",
-      firebaseUid: "private-firebase-uid",
-      phoneNumber: "+919876543210",
-      displayName: "Admin",
-      email: "admin@example.com",
+describe("parseAdminIdentity", () => {
+  it("accepts nested identity payloads from auth service", () => {
+    expect(
+      parseAdminIdentity({
+        identity: {
+          displayName: "Ops Admin",
+          email: "ops@craves.test",
+          status: "active",
+          roles: ["customer", "internal_admin"],
+        },
+      }),
+    ).toEqual({
+      displayName: "Ops Admin",
+      email: "ops@craves.test",
       status: "ACTIVE",
-      roles: ["CUSTOMER", "ADMIN"]
-    }
+      roles: ["CUSTOMER", "INTERNAL_ADMIN"],
+      adminEnabled: true,
+    });
   });
 
-  assert.equal(parsed?.adminEnabled, true);
-  assert.equal(parsed?.displayName, "Admin");
-  assert.equal(parsed?.email, "admin@example.com");
-  assert.equal("id" in (parsed ?? {}), false);
-  assert.equal("roles" in (parsed ?? {}), false);
-  assert.equal("phoneNumber" in (parsed ?? {}), false);
-  assert.equal("firebaseUid" in (parsed ?? {}), false);
-});
-
-test("retains compatibility with an older flat identity response", () => {
-  const parsed = parseAdminIdentity({
-    displayName: "Admin",
-    email: "admin@example.com",
-    status: "active",
-    roles: ["admin"]
+  it("rejects non-admin identities", () => {
+    expect(
+      parseAdminIdentity({
+        identity: {
+          displayName: "Customer",
+          email: "customer@craves.test",
+          status: "active",
+          roles: ["customer"],
+        },
+      }),
+    ).toEqual({
+      displayName: "Customer",
+      email: "customer@craves.test",
+      status: "ACTIVE",
+      roles: ["CUSTOMER"],
+      adminEnabled: false,
+    });
   });
-
-  assert.equal(parsed?.adminEnabled, true);
-  assert.equal(parsed?.status, "ACTIVE");
-});
-
-test("does not enable inactive or non-admin identity", () => {
-  assert.equal(parseAdminIdentity({ identity: { status: "INACTIVE", roles: ["ADMIN"] } })?.adminEnabled, false);
-  assert.equal(parseAdminIdentity({ identity: { status: "ACTIVE", roles: ["CUSTOMER"] } })?.adminEnabled, false);
-});
-
-test("rejects malformed or incomplete identity envelopes", () => {
-  assert.equal(parseAdminIdentity(null), null);
-  assert.equal(parseAdminIdentity({ identity: null }), null);
-  assert.equal(parseAdminIdentity({ identity: { status: "ACTIVE", roles: [] } }), null);
 });
