@@ -1,40 +1,28 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from 'vitest';
 
-const activeDomains = [
-  "backend",
-  "web",
-  "mobile",
-  "database",
-  "integrations",
-  "cloud",
-] as const;
+import { buildTrainConfig } from '@/lib/build-train-config';
 
-const canonicalWebModule = "apps/customer-web-next";
-const forbiddenRuntime = "Node.js backend";
-const orderedMilestones = [
-  "Architecture lock and repo guardrails",
-  "Infra deployability alignment",
-  "Auth, session, and RBAC hardening",
-  "Admin closure in customer-web-next",
-] as const;
-
-describe("build train web alignment", () => {
-  it("keeps web inside the active domain set", () => {
-    expect(activeDomains).toContain("web");
+describe('build train web alignment', () => {
+  it('keeps web inside the active domain set', () => {
+    expect(buildTrainConfig.activeDomains).toContain('web');
   });
 
-  it("points to the canonical Next.js production module", () => {
-    expect(canonicalWebModule).toBe("apps/customer-web-next");
+  it('points to the canonical Next.js production module', () => {
+    expect(buildTrainConfig.canonicalWebModule).toBe('apps/customer-web-next');
   });
 
-  it("guards against extending a Node.js backend runtime", () => {
-    expect(forbiddenRuntime.toLowerCase()).toContain("node.js backend");
+  it('guards against extending a Node.js backend runtime', () => {
+    expect(buildTrainConfig.forbiddenRuntimeDirection.toLowerCase()).toContain('node.js backend');
   });
 
-  it("preserves the expected early milestone order", () => {
-    expect(orderedMilestones[0]).toMatch(/Architecture lock/i);
-    expect(orderedMilestones[1]).toMatch(/Infra deployability/i);
-    expect(orderedMilestones[2]).toMatch(/RBAC/i);
-    expect(orderedMilestones[3]).toMatch(/customer-web-next/i);
+  it('preserves the expected early milestone order', () => {
+    expect(buildTrainConfig.sequence[0]?.title).toMatch(/Architecture lock/i);
+    expect(buildTrainConfig.sequence[1]?.title).toMatch(/Infra deployability/i);
+    expect(buildTrainConfig.sequence[2]?.title).toMatch(/RBAC/i);
+    expect(buildTrainConfig.sequence[3]?.title).toMatch(/customer-web-next/i);
+  });
+
+  it('keeps the build train route bound to the shared work branch', () => {
+    expect(buildTrainConfig.branchName).toBe('crewai/full-build-train-request');
   });
 });
