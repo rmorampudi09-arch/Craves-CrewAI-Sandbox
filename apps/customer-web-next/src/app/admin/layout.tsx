@@ -8,7 +8,8 @@ import "@syncfusion/ej2-tailwind3-theme/styles/popup/popup.css";
 import "@syncfusion/ej2-tailwind3-theme/styles/spinner/spinner.css";
 import "@syncfusion/ej2-tailwind3-theme/styles/tooltip/tooltip.css";
 import { AdminWorkspace } from "@/components/admin-workspace";
-import { apiBaseUrl } from "@/lib/server-api";
+import { authenticatedApiFetchFromServer, SessionRequiredError } from "@/lib/server-api";
+import { parseIdentity } from "@/lib/auth-contract";
 
 export const metadata: Metadata = {
   title: "Craves administration",
@@ -16,22 +17,24 @@ export const metadata: Metadata = {
 };
 
 async function requireAdminAccess(): Promise<void> {
-  const response = await fetch(`${apiBaseUrl()}/auth/me`, {
-    cache: "no-store",
-    headers: { Accept: "application/json" },
-  }).catch(() => null);
+  try {
+    const response = await authenticatedApiFetchFromServer("/auth/me");
+    const body = (await response.json().catch(() => null)) as { identity?: unknown } | null;
+    const identity = parseIdentity(body?.identity);
 
-  if (!response?.ok) {
-    redirect("/sign-in?next=/admin");
-  }
+    if (!response.ok || !identity) {
+      redirect("/sign-in?next=/admin");
+    }
 
-  const payload = (await response.json().catch(() => null)) as
-    | { identity?: { roles?: string[] } }
-    | null;
-
-  const roles = payload?.identity?.roles ?? [];
-  if (!roles.some((role) => role.toUpperCase() === "ADMIN")) {
-    redirect("/home");
+    const hasAdminRole = identity.roles.some((role) => role.toUpperCase() === "ADMIN");
+    if (!hasAdminRole) {
+      redirect("/home");
+    }
+  } catch (error) {
+    if (error instanceof SessionRequiredError) {
+      redirect("/sign-in?next=/admin");
+    }
+    throw error;
   }
 }
 
