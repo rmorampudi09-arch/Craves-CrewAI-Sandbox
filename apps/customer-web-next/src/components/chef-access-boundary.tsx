@@ -11,7 +11,7 @@ import {
 type AccessState = "synchronizing" | "ready" | "sign-in" | "not-approved";
 
 function hasChefRole(user: CravesUser | null): boolean {
-  return Boolean(user?.roles.some((role) => role.toUpperCase() === "CHEF"));
+  return Boolean(user?.roles.some(role => role.toUpperCase() === "CHEF"));
 }
 
 export function ChefAccessBoundary({ children }: { children: ReactNode }) {
@@ -44,7 +44,7 @@ export function ChefAccessBoundary({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  if (state === "ready") return children;
+  if (state === "ready") return <>{children}</>;
 
   return (
     <section className="rounded-[30px] bg-[#FFF8EC] p-7 text-slate-950">
