@@ -1,0 +1,21 @@
+name: mobile-bootstrap
+
+on:
+  workflow_dispatch:
+
+jobs:
+  mobile-bootstrap-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Mobile bootstrap status
+        run: |
+          echo "React Native bootstrap shell present under apps/mobile"
+          echo "Store publishing remains PENDING MANUAL ACTION"
