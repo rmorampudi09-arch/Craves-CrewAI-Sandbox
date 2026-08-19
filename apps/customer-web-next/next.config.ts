@@ -1,26 +1,61 @@
 import type { NextConfig } from "next";
 
+const remoteImagePatterns = [
+  {
+    protocol: "https" as const,
+    hostname: "images.unsplash.com",
+    pathname: "/**",
+  },
+  {
+    protocol: "https" as const,
+    hostname: "plus.unsplash.com",
+    pathname: "/**",
+  },
+  {
+    protocol: "https" as const,
+    hostname: "res.cloudinary.com",
+    pathname: "/**",
+  },
+  {
+    protocol: "https" as const,
+    hostname: "*.blob.core.windows.net",
+    pathname: "/**",
+  },
+];
+
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
-  // Azure Front Door serves and caches immutable build assets. Disable the
-  // standalone Next.js server's gzip path because gzip responses can stall
-  // before sending headers, leaving cold devices on the loading shell.
   compress: false,
   images: {
     disableStaticImages: true,
-    remotePatterns: [{ protocol: "https", hostname: "**" }],
+    remotePatterns: remoteImagePatterns,
   },
   async headers() {
     return [
       {
-        source: "/(.*)",
+        source: "/:path*",
         headers: [
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "X-Frame-Options", value: "DENY" },
-          { key: "Permissions-Policy", value: "geolocation=(self), camera=(), microphone=()" }
+          {
+            key: "Permissions-Policy",
+            value: "geolocation=(self), camera=(), microphone=(), payment=(self)",
+          },
         ],
+      },
+      {
+        source: "/admin/:path*",
+        headers: [{ key: "Cache-Control", value: "no-store, max-age=0" }],
+      },
+      {
+        source: "/chef/:path*",
+        headers: [{ key: "Cache-Control", value: "no-store, max-age=0" }],
+      },
+      {
+        source: "/api/:path*",
+        headers: [{ key: "Cache-Control", value: "no-store, max-age=0" }],
       },
     ];
   },
