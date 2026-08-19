@@ -1,5 +1,7 @@
-import { AdminDashboard } from "@/components/admin-dashboard";
+import { AdminShell } from "@/components/admin-shell";
+
+export const dynamic = "force-dynamic";
 
 export default function AdminPage() {
-  return <AdminDashboard />;
+  return <AdminShell />;
 }
