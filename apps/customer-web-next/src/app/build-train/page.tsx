@@ -2,7 +2,8 @@ import { BuildTrainWorkspace } from "@/components/build-train/build-train-worksp
 
 export const metadata = {
   title: "Build train request | Craves",
-  description: "Production-readiness execution plan for the Craves Next.js web platform."
+  description:
+    "Production-readiness execution board for the canonical Craves Next.js web surface.",
 };
 
 export default function BuildTrainPage() {
